@@ -1,0 +1,65 @@
+data:
+  input_path: data/processed/merged_features_clean.csv
+  start_date: null
+  end_date: null
+  features:
+    - Return
+    - RollingVol
+    - RSI
+    - Price_to_SMA20
+    - Price_to_SMA50
+    - SMA20_to_SMA50
+    - Volume_Z
+    - VIX
+    - Lagged_Return
+  # FwdVolRegime is the honest forward-disjoint target (next 10 days), used for the saved
+  # model and the explainability notebook. NextVolSpike (next-day) is near-trivial and
+  # appears only in the model comparison, where a matched naive rule beats every learned
+  # model.
+  target: FwdVolRegime
+
+split:
+  method: expanding
+  train_start: "2015-07-20"
+  initial_train_end: "2018-12-31"
+  # Window sizes count trading days observed in the data, so 63 is one full quarter of
+  # market sessions and 252 one trading year.
+  test_size_days: 63
+  step_size_days: 63
+  min_train_size_days: 252
+
+models:
+  lightgbm:
+    n_estimators: 200
+    learning_rate: 0.05
+    max_depth: 5
+    num_leaves: 31
+    min_child_samples: 50
+    subsample: 0.8
+    colsample_bytree: 0.8
+    class_weight: balanced
+    random_state: 42
+    verbose: -1
+  # scale_pos_weight is derived from the training class ratio at fit time unless set here,
+  # keeping XGBoost's imbalance handling comparable to the class-weighted models above.
+  xgboost:
+    n_estimators: 500
+    learning_rate: 0.03
+    max_depth: 7
+    subsample: 0.8
+    colsample_bytree: 0.8
+    eval_metric: logloss
+    random_state: 42
+
+evaluation:
+  pos_label: 1
+  forward_window: 10
+  # The saved artifact is the model named here. Leave null to let scripts/save_model.py
+  # pick the best learned model by walk-forward PR-AUC on the config target. Logistic
+  # regression is pinned because it has the top PR-AUC and the only edge over the matched
+  # naive baseline that clears both dependence-aware significance tests. That edge also
+  # survives a Holm correction across the three learned models compared.
+  final_model: LogisticRegression
+  targets:
+    - NextVolSpike
+    - FwdVolRegime
