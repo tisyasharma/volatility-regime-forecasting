@@ -1,7 +1,7 @@
 # Methodology and Results
 
 The detailed reasoning, evaluation design, and full results behind the [README](../README.md).
-It covers why volatility is the target, the model comparison on both targets, dependence-aware
+Here we cover why volatility is the target, the model comparison on both targets, dependence-aware
 significance, operating points, explainability, calibration, and the leakage controls.
 
 ## Choosing volatility over direction
@@ -14,7 +14,7 @@ modeling was not pursued. That is consistent with the weak form of the efficient
 hypothesis.
 
 Volatility behaves differently here. The autocorrelation of absolute daily returns, the standard
-volatility-clustering measure (Cont 2001), sits around 0.24 at a one-day lag in this data and
+volatility-clustering measure (Cont 2001), sits near 0.236 at a one-day lag in this data and
 decays only slowly, while raw returns sit near zero at every lag. A rolling-window measure
 would show more, but mostly as an artifact of overlapping windows. That difference defines the
 target, **whether the next 10 trading days are a high-volatility regime**, meaning volatility
@@ -27,7 +27,7 @@ above its own historical 80th percentile.
 When a one-line naive rule alone nearly saturates a metric, high scores on it measure
 autocorrelation rather than skill. Every model is therefore run against a **matched naive
 baseline**, which predicts a regime whenever today's volatility already exceeds the same
-per-ticker threshold that defines the label. Two targets are evaluated:
+per-ticker threshold that defines the label. Two targets are evaluated.
 
 - **NextVolSpike (next-day):** the 10-day rolling volatility at `t` and `t+1` overlap by nine
   days, so this target is close to a restatement of today's regime. It is retained as the
@@ -95,11 +95,36 @@ borderline in the block bootstrap and stays marginal under the effective-N test.
 (+0.016, p=0.23) does not clear it. HAR trails the naive rule (block-bootstrap p=0.04), a
 deficit that is itself marginal under the effective-N test (t=-1.9, p about 0.08). These
 p-values are unadjusted for the three learned models tested, and under a Holm correction the
-linear result stays significant (p=0.0066) while the LightGBM result does not. The intervals
-correct for serial correlation across folds but not for cross-sectional co-movement of the 14
-tickers, so the smaller edges are best read cautiously.
+linear result stays significant (p=0.0066) while the LightGBM result does not.
+
+That fold-block bootstrap corrects for serial correlation but still counts the 14 co-moving
+tickers as independent within each fold. A second bootstrap resamples whole trading dates in
+21-day blocks so each drawn date carries its full cross-section, which is the primary reading
+(`reports/metrics/significance_crosssectional.csv`). The linear model holds under it at +0.034
+PR-AUC, 95% CI [0.009, 0.047], p=0.009, and clears the Holm correction across the three learned
+models (p=0.028). Counting the cross-section honestly raises the p-value from 0.002 to 0.009.
+LightGBM slips to borderline (p=0.042) and the small HAR deficit is no longer significant
+(p=0.10), so the logistic regression is the only model whose edge survives the
+cross-sectional-aware test.
 
 ![Per-fold F1 over time for the key models](../reports/figures/f1_by_fold.png)
+
+## Threshold and horizon sensitivity
+
+The headline fixes the regime at the 80th percentile over a 10-day window, so the edge should be
+checked against other choices. `scripts/sensitivity_grid.py` sweeps the quantile over 0.70, 0.80,
+and 0.90 and the horizon over 5, 10, and 21 trading days, recomputing the leakage-safe threshold
+in each cell so the base rate tracks the quantile and the cells stay comparable. The (0.80, 10)
+cell reproduces the headline edge and anchors the grid.
+
+![Logistic regression edge over the matched naive baseline by threshold and horizon](../reports/figures/sensitivity_grid.png)
+
+The edge is strongest and significant at the 5-day horizon, above +0.04 at every quantile, and
+holds at the 10-day horizon for the 0.70 and 0.80 quantiles, +0.038 and +0.033.
+The one 10-day cell that misses significance is the 0.90 quantile, where the regime is rarest
+(+0.027, p=0.06), and no cell is significant at the 21-day horizon, where only +0.014 remains at
+the headline threshold. The result holds for short horizons at moderate thresholds and should not
+be read as horizon-agnostic.
 
 ## Operating points
 
@@ -125,10 +150,19 @@ computes SHAP on the 2023-onward holdout. The market's implied-volatility gauge,
 dominant driver, roughly a third of total attribution in every regime (29% calm, 35% normal,
 33% turbulent). Current realized volatility is a clear second in the calm and turbulent thirds,
 though it falls to fifth in the normal third. To forecast the regime ten days out, the model
-relies on the forward-looking signal. A coefficient analysis of the logistic regression champion
-is planned follow-up work.
+relies on the forward-looking signal. The effect direction is monotonic and economically
+sensible, high VIX and high current volatility both push the forecast toward the regime, as the
+beeswarm shows. The logistic regression champion is read the same way through its standardized
+coefficients. VIX and current volatility take stable positive weights, the same direction as the
+SHAP, while the three price-to-moving-average ratios carry large offsetting coefficients that
+reflect their near-collinearity rather than standalone importance. That collinearity is why the
+tree SHAP, robust to it, ranks VIX and volatility on top instead.
 
 ![SHAP attribution by volatility regime](../reports/figures/shap_by_regime.png)
+
+![SHAP impact and direction on the 2023-onward holdout](../reports/figures/shap_beeswarm.png)
+
+![Logistic regression standardized coefficients across walk-forward folds](../reports/figures/logreg_coefficients.png)
 
 ## Calibration
 
@@ -146,7 +180,7 @@ calibration itself inherits regime shift.
 ## How leakage is prevented
 
 Financial time-series models fail silently when future information leaks into training. Four
-safeguards address this:
+safeguards address this.
 
 - **Target threshold uses only the past, and is stored, not re-derived.** The label compares
   future volatility to an expanding 80th-percentile threshold computed with `shift(1)`, so the
@@ -176,17 +210,18 @@ safeguards address this:
 - **The lift is modest.** About 0.03 PR-AUC over the matched naive baseline for the best model,
   statistically significant (see Significance testing) but small. This is a hard forecasting
   problem.
-- **Inference corrects for serial dependence, not cross-sectional.** The folds are serially
-  correlated (effective folds roughly 14 to 22 across models), so significance uses a block
-  bootstrap rather than per-fold spread. Each fold still pools 14 co-moving tickers into one
-  PR-AUC, so effective breadth is well below 14 and the intervals are mildly optimistic.
+- **Cross-sectional dependence is now in the interval, breadth is still limited.** The primary
+  significance uses a date-block bootstrap that resamples whole trading dates, so the 14 co-moving
+  tickers count as one cross-section rather than 14 independent draws (see Significance testing).
+  The 14 names span six sectors with correlated airlines, so effective breadth is well below 14
+  and a wider universe would sharpen the test.
 - **The final fold is short.** The last test window covers the 9 trading days remaining at the
   end of the sample, kept so the newest data is still evaluated. For the next-day target it
   carries the same weight as a full fold in the fold-mean. The last day of the final full window
   similarly drops out of the forward target because its label window extends past the data.
 - **No trading cost model.** This is a forecasting study, not a backtest of a tradable system net
   of transaction costs, slippage, or borrow.
-- **Fixed threshold and horizon.** High volatility is the 80th percentile over a 10-day window,
-  and other choices would change base rates and metrics. A threshold and horizon sensitivity grid
-  is planned as follow-up work, pre-specified here before any grid results were inspected.
+- **The edge is horizon-specific.** The headline uses the 80th percentile over a 10-day window.
+  The sensitivity grid holds for 5 and 10-day horizons at moderate thresholds and fades toward the
+  21-day horizon, so the finding is specific to short horizons rather than general.
 - **US large caps only.** Findings may not transfer to other asset classes or market caps.

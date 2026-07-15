@@ -7,7 +7,7 @@ always predicting an up-day, while volatility is persistent enough to forecast. 
 tests whether that persistence amounts to measurable skill once leakage and naive baselines are
 ruled out.
 
-![PR-AUC by model on the next-day and forward volatility targets](repdo youorts/figures/target_reversal.png)
+![PR-AUC by model on the next-day and forward volatility targets](reports/figures/target_reversal.png)
 
 ## Overview
 
@@ -37,11 +37,12 @@ Forward target, mean across 28 walk-forward folds, with a no-skill PR-AUC floor 
 | LightGBM | 0.33 | 0.50 | 0.38 | 0.36 |
 | **Logistic Regression** | 0.32 | 0.55 | **0.38** | **0.37** |
 
-The logistic regression adds +0.034 PR-AUC over the matched naive baseline (95% CI [0.014,
-0.061], block-bootstrap p=0.002), the only model whose edge holds under both an
-effective-sample-size t-test and a Holm correction. LightGBM is marginal, XGBoost is not
-significant, and HAR trails the naive rule. The full comparison, the next-day results, operating
-points, explainability, and calibration are in [docs/METHODOLOGY.md](docs/METHODOLOGY.md).
+The logistic regression adds +0.034 PR-AUC over the matched naive baseline, and the edge survives
+a date-block bootstrap that clusters the 14 co-moving tickers by trading date (95% CI [0.009,
+0.047], p=0.009, Holm p=0.028 across the three learned models). It is the only model that clears
+that cross-sectional-aware bar. LightGBM is marginal, XGBoost is not significant, and HAR trails
+the naive rule. The full comparison, the next-day results, the threshold and horizon grid,
+operating points, explainability, and calibration are in [docs/METHODOLOGY.md](docs/METHODOLOGY.md).
 
 ## Leakage controls
 
@@ -69,12 +70,13 @@ python scripts/run_evaluation.py     # walk-forward metrics, both targets -> rep
 python scripts/significance.py        # dependence-aware significance -> reports/metrics/
 python scripts/operating_points.py    # alert-budget operating points -> reports/metrics/
 python scripts/make_figures.py        # metrics-derived figures -> reports/figures/
+python scripts/sensitivity_grid.py    # threshold and horizon robustness grid -> reports/
 python scripts/save_model.py          # train and save the final model -> models/artifacts/
 pytest tests/                         # split and purge invariants
 ```
 
 The notebooks reproduce the same pipeline interactively, from raw download through EDA, modeling,
-and explainability. The SHAP and calibration figures are rendered by `03_explainability.ipynb`.
+and explainability. The SHAP, coefficient, and calibration figures are rendered by `03_explainability.ipynb`.
 
 ## Repository structure
 
@@ -90,7 +92,7 @@ volatility-regime-forecasting/
     split.py                  Expanding-window walk-forward splits with purge
     targets.py                Forward-disjoint target and the matched naive baseline
     modeling.py               Baselines, models, HAR, and evaluation
-  scripts/                    Evaluation, significance, operating points, figures, model
+  scripts/                    Evaluation, significance, operating points, figures, model, sensitivity grid
   tests/                      Split and purge invariants
   notebooks/                  Data collection, EDA, modeling, explainability
   reports/
@@ -115,11 +117,13 @@ full column list and the [model card](reports/model_card.md) has the modeling de
 
 - **The lift is modest.** About 0.03 PR-AUC over the matched naive baseline for the best model,
   statistically significant but small. This is a hard forecasting problem.
-- **Inference corrects for serial dependence, not cross-sectional.** Each fold pools 14 co-moving
-  tickers into one PR-AUC, so effective breadth is below 14 and the intervals are mildly
-  optimistic.
-- **Scope.** US large caps only, with no trading-cost model and a fixed 80th-percentile 10-day
-  regime definition. A threshold and horizon sensitivity grid is pre-specified as follow-up work.
+- **Cross-sectional dependence is in the primary interval, breadth is still limited.** The
+  headline significance clusters the 14 co-moving tickers by trading date, so they count as one
+  cross-section rather than 14 draws. The universe is still 14 names, so a wider one would sharpen
+  the test.
+- **Scope.** US large caps only, with no trading-cost model. The headline regime is the 80th
+  percentile over 10 days, and the sensitivity grid shows the edge holds for short horizons at
+  moderate thresholds and fades by the 21-day horizon.
 
 The [methodology](docs/METHODOLOGY.md) has the full limitations.
 

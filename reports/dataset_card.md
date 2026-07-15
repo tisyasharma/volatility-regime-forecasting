@@ -11,9 +11,9 @@
 
 ## Provenance
 
-- Sources: daily OHLCV from Yahoo Finance (via `yfinance`); VIX index as a market-wide
+- Sources: daily OHLCV from Yahoo Finance (via `yfinance`), VIX index as a market-wide
   volatility signal.
-- Collection period: raw download 2015-01-02 to 2026-01-22 (warm-up rows included);
+- Collection period: raw download 2015-01-02 to 2026-01-22 (warm-up rows included),
   model-ready window 2015-07-20 to 2026-01-21 after trimming incomplete lookbacks.
 - Tickers: AAPL, MSFT, AMZN, GOOGL, NVDA, TSLA (technology), JPM (finance), WMT (retail),
   DAL, UAL (airlines), LMT, RTX, NOC (defense), XOM (energy).
@@ -23,7 +23,7 @@
 
 - Two files. `data/raw/merged_features_full.csv` (38,920 rows) keeps warm-up rows with
   incomplete indicators for EDA. `data/processed/merged_features_clean.csv` (37,002 rows) is
-  the model-ready set after dropping rows with incomplete lookback windows; 1,918 rows are
+  the model-ready set after dropping rows with incomplete lookback windows. 1,918 rows are
   dropped.
 - Features: `Return`, `RollingVol`, `RSI`, `Price_to_SMA20`, `Price_to_SMA50`,
   `SMA20_to_SMA50`, `Volume_Z`, `VIX`, `Lagged_Return`. All are known at time `t`.
@@ -55,8 +55,8 @@
 
 ## Risk and sensitivity
 
-- No personal or sensitive data; market prices only.
-- Representation gaps: US large caps across six sectors; airline tickers are highly
+- No personal or sensitive data, market prices only.
+- Representation gaps: US large caps across six sectors. Airline tickers are highly
   correlated, reducing effective independence.
 - Foreseeable misuse: treating these forecasts as a tradable signal without a cost and
   execution model.
@@ -67,4 +67,4 @@
   time-series evaluation.
 - Unsuitable: live trading or investment decisions.
 - Maintenance: append new daily data and rerun `notebooks/00_data_collection.ipynb` to
-  refresh features and targets; the notebook persists `vol_threshold` alongside them.
+  refresh features and targets. The notebook persists `vol_threshold` alongside them.
