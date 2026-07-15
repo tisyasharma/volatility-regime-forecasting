@@ -1,0 +1,5 @@
+target,metric,model,vs,mean_diff,n_folds,fold_autocorr,n_eff,t_naive,t_effN,block_boot_ci_lo,block_boot_ci_hi,block_boot_p
+FwdVolRegime,pr_auc,LogisticRegression,MatchedNaive,0.0335,28,0.138,21.2,3.07,2.67,0.0136,0.0605,0.0022
+FwdVolRegime,pr_auc,LightGBM,MatchedNaive,0.0262,28,0.317,14.5,2.23,1.61,0.0019,0.0596,0.0358
+FwdVolRegime,pr_auc,XGBoost,MatchedNaive,0.0156,28,0.321,14.4,1.27,0.91,-0.0139,0.0522,0.2301
+FwdVolRegime,pr_auc,HAR,MatchedNaive,-0.0116,28,0.123,21.9,-2.1,-1.85,-0.0219,-0.0006,0.0395

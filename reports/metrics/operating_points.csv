@@ -1,0 +1,13 @@
+target,model,alert_budget,cutoff,alert_rate,precision,recall,f1,fp_per_fold_min,fp_per_fold_median,fp_per_fold_max
+FwdVolRegime,LogisticRegression,0.05,0.9194,0.05,0.8316,0.1554,0.2619,0,0.0,96
+FwdVolRegime,LogisticRegression,0.1,0.8378,0.1,0.7388,0.276,0.4019,0,3.5,194
+FwdVolRegime,LogisticRegression,0.15,0.7757,0.15,0.6784,0.3801,0.4872,0,12.5,250
+FwdVolRegime,LogisticRegression,0.2,0.7173,0.2,0.6226,0.4651,0.5325,0,30.0,263
+FwdVolRegime,LogisticRegression,0.25,0.6597,0.25,0.5759,0.5378,0.5562,0,53.5,281
+FwdVolRegime,LogisticRegression,0.3,0.6147,0.3,0.5318,0.5959,0.562,7,76.5,336
+FwdVolRegime,MatchedNaive,0.05,1.8215,0.05,0.7433,0.1389,0.2341,0,8.5,81
+FwdVolRegime,MatchedNaive,0.1,1.4262,0.1,0.6262,0.2339,0.3406,0,27.0,104
+FwdVolRegime,MatchedNaive,0.15,1.2495,0.15,0.5593,0.3134,0.4017,1,56.0,148
+FwdVolRegime,MatchedNaive,0.2,1.1296,0.2,0.5285,0.3948,0.4519,10,73.5,186
+FwdVolRegime,MatchedNaive,0.25,1.0314,0.25,0.4996,0.4665,0.4825,30,103.0,218
+FwdVolRegime,MatchedNaive,0.3,0.9567,0.3,0.4754,0.5326,0.5024,52,134.5,239
