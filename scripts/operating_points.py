@@ -32,9 +32,11 @@ def budget_row(df, budget, target):
     Metrics for one model at one alert budget on pooled out-of-fold predictions.
 
     The cutoff is the (1 - budget) quantile of the model's scores, so roughly the top
-    budget share of ticker-days is flagged. False-alarm dispersion is reported across
-    folds, where each fold is one test window of split.test_size_days trading days
-    pooled over all tickers.
+    budget share of ticker-days is flagged. The pooled alert rate holds at the budget by
+    construction, so the per-window alert rate and the false-alarm count are each reported
+    as a min, median, and max across folds, where each fold is one test window of
+    split.test_size_days trading days pooled over all tickers, showing how unevenly the
+    alerts concentrate.
     """
     score = df["y_proba"].to_numpy()
     y = df["y_true"].to_numpy()
@@ -49,7 +51,9 @@ def budget_row(df, budget, target):
     recall = tp / (tp + fn) if tp + fn else np.nan
     f1 = 2 * precision * recall / (precision + recall) if precision + recall else np.nan
 
-    fp_by_fold = df.assign(fp_flag=fp_flags).groupby("fold")["fp_flag"].sum()
+    by_fold = df.assign(alert=pred, fp_flag=fp_flags).groupby("fold")
+    fp_by_fold = by_fold["fp_flag"].sum()
+    alert_rate_by_fold = by_fold["alert"].mean()
 
     return {
         "target": target,
@@ -57,6 +61,9 @@ def budget_row(df, budget, target):
         "alert_budget": budget,
         "cutoff": round(cutoff, 4),
         "alert_rate": round(float(pred.mean()), 4),
+        "alert_rate_per_fold_min": round(float(alert_rate_by_fold.min()), 4),
+        "alert_rate_per_fold_median": round(float(alert_rate_by_fold.median()), 4),
+        "alert_rate_per_fold_max": round(float(alert_rate_by_fold.max()), 4),
         "precision": round(precision, 4),
         "recall": round(recall, 4),
         "f1": round(f1, 4),

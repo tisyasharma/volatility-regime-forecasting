@@ -116,29 +116,34 @@ def run():
             y_train = df.loc[train_mask, target_col]
             X_test = df.loc[test_mask, feature_cols]
 
-            def record(name, y_true, y_pred, y_proba, n_test):
-                """Score one model on this fold and append its metric and OOF rows."""
+            def record(name, y_true, y_pred, y_proba, mask):
+                """Score one model on this fold and append its metric and OOF rows.
+
+                Date and Ticker are carried into the OOF so significance.py can cluster the
+                bootstrap by trading date and account for the cross-section of tickers.
+                """
                 proba_for_metrics = None if name in HARD_LABEL_MODELS else y_proba
                 metrics = evaluate_model(y_true, y_pred, proba_for_metrics, pos_label=pos_label)
                 rows.append({
                     "target": target_col, "fold": fold_idx, "model": name,
-                    "test_start": te_start, "test_end": te_end, "n_test": n_test,
+                    "test_start": te_start, "test_end": te_end, "n_test": int(mask.sum()),
                     "positive_rate": float(np.mean(np.asarray(y_true) == pos_label)),
                     **metrics,
                 })
                 oof_rows.append(pd.DataFrame({
-                    "target": target_col, "fold": fold_idx, "model": name,
-                    "test_start": te_start, "y_true": np.asarray(y_true), "y_proba": np.asarray(y_proba),
+                    "target": target_col, "fold": fold_idx, "model": name, "test_start": te_start,
+                    "Date": df.loc[mask, "Date"].to_numpy(), "Ticker": df.loc[mask, "Ticker"].to_numpy(),
+                    "y_true": np.asarray(y_true), "y_proba": np.asarray(y_proba),
                 }))
 
             for name, builder in MODEL_BUILDERS.items():
                 model = builder(X_train, y_train, model_cfg)
                 y_pred, y_proba = predict_with_model(model, X_test)
-                record(name, y_test, y_pred, y_proba, int(test_mask.sum()))
+                record(name, y_test, y_pred, y_proba, test_mask)
 
             # Matched naive baseline: already above the label's own threshold today.
             naive_pred, naive_score = matched_naive_predict(df.loc[test_mask])
-            record("MatchedNaive", y_test, naive_pred, naive_score, int(test_mask.sum()))
+            record("MatchedNaive", y_test, naive_pred, naive_score, test_mask)
 
             # HAR econometric benchmark: forecast the target volatility, threshold identically.
             har_train_mask = train_mask & cont_ok & har_feat_ok
@@ -150,7 +155,7 @@ def run():
                 y_pred, y_proba = threshold_to_prediction(forecast, thr, har_model["scale"])
                 y_test_har = df.loc[har_test_mask, target_col]
                 if y_test_har.nunique() >= 2:
-                    record("HAR", y_test_har, y_pred, y_proba, int(har_test_mask.sum()))
+                    record("HAR", y_test_har, y_pred, y_proba, har_test_mask)
 
     if not rows:
         raise SystemExit(

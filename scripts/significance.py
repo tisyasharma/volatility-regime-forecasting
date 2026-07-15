@@ -1,14 +1,12 @@
 """
 Dependence-aware significance for the model comparison.
 
-Per-fold metrics are not independent: volatility clusters in time and the tickers co-move, so
-the naive standard error understates uncertainty. This tests whether each model beats the matched
-naive baseline on the forward-disjoint target with a moving-block bootstrap over folds and an
-AR(1) effective-sample-size adjustment, reported alongside the naive paired t-test so the
-inflation is visible.
-
-Both are gap-aware: when a fold is missing for one model, blocks and lag-1 pairs are formed only
-across consecutive folds, not across non-adjacent quarters.
+Two resamplings test each model against the matched naive baseline on the forward-disjoint
+target. The fold-block bootstrap over the time-ordered folds corrects for serial correlation
+only. The date-block bootstrap resamples whole trading dates, each carrying its cross-section
+of tickers, so it also corrects for the co-movement of the 14 names. The date-block result is
+the primary one, the fold-block result is kept so the inflation from ignoring the cross-section
+is visible.
 """
 
 import sys
@@ -23,79 +21,23 @@ sys.path.insert(0, str(REPO_ROOT))
 METRICS = REPO_ROOT / "reports" / "metrics"
 
 from src.config import load_config
+from src.resampling import paired_edge_stats, date_block_bootstrap_edge
 
-N_BOOT = 20000
-BLOCK = 4          # moving-block length over time-ordered folds
 SEED = 42
 METRIC = "pr_auc"
 BASELINE = "MatchedNaive"
+MODELS = ["LogisticRegression", "LightGBM", "XGBoost", "HAR"]
+DATE_BLOCK = 21      # moving-block length in trading days for the cross-sectional bootstrap
+N_BOOT_XS = 3000     # date-block resamples, kept modest since average precision is recomputed
 
 
-def lag1_autocorr(x, fold_ids=None):
-    """
-    Lag-1 autocorrelation of x, normalized by the total sum of squares.
-
-    When fold_ids is given, only pairs of adjacent folds contribute, so gaps
-    left by skipped folds are not treated as consecutive quarters. The numerator is
-    rescaled by (n - 1) / n_pairs so that dropping gap-spanning pairs does not shrink
-    the estimate toward zero (which would inflate the effective sample size). With no
-    gaps the rescaling factor is exactly 1.
-    """
-    x = np.asarray(x, dtype=float)
-    x = x - x.mean()
-    denom = np.sum(x * x)
-    if denom <= 0:
-        return 0.0
-    if fold_ids is None:
-        num = np.sum(x[1:] * x[:-1])
-    else:
-        adjacent = np.diff(np.asarray(fold_ids)) == 1
-        n_pairs = int(adjacent.sum())
-        if n_pairs == 0:
-            return 0.0
-        num = np.sum(x[1:][adjacent] * x[:-1][adjacent]) * (len(x) - 1) / n_pairs
-    return float(num / denom)
+def _round(value, digits):
+    """Round, passing NaN through untouched."""
+    return np.nan if value is None or (isinstance(value, float) and np.isnan(value)) else round(value, digits)
 
 
-def moving_block_bootstrap_mean(diff, rng, n_boot=N_BOOT, block=BLOCK, fold_ids=None):
-    """
-    Bootstrap distribution of the mean of diff using moving blocks of consecutive folds.
-
-    When fold_ids is given, a block may only start at a position where the next block-1
-    fold ids are consecutive, preserving the serial structure the block bootstrap relies on.
-    Degenerate inputs fall back to smaller blocks instead of crashing.
-    """
-    # Block resampling follows the moving-block bootstrap of Kuensch (1989).
-    n = len(diff)
-    block_eff = max(1, min(block, n))
-    if fold_ids is None:
-        starts_pool = np.arange(0, n - block_eff + 1)
-    else:
-        ids = np.asarray(fold_ids)
-        candidates = np.arange(0, n - block_eff + 1)
-        starts_pool = candidates[ids[candidates + block_eff - 1] - ids[candidates] == block_eff - 1]
-        if len(starts_pool) == 0:
-            warnings.warn(
-                "No run of consecutive folds long enough for the block bootstrap, "
-                "falling back to single-fold blocks.",
-                RuntimeWarning,
-            )
-            block_eff = 1
-            starts_pool = np.arange(0, n)
-    n_blocks = int(np.ceil(n / block_eff))
-    means = np.empty(n_boot)
-    for b in range(n_boot):
-        starts = rng.choice(starts_pool, size=n_blocks, replace=True)
-        idx = np.concatenate([np.arange(s, s + block_eff) for s in starts])[:n]
-        means[b] = diff[idx].mean()
-    return means
-
-
-def main():
-    """Run the paired model-vs-baseline tests and write significance.csv."""
-    cfg = load_config()
-    target = (cfg.get("data") or {}).get("target", "FwdVolRegime")
-
+def fold_block_table(target):
+    """Fold-block bootstrap of the per-fold PR-AUC edge, the serial-only comparison."""
     per_fold = pd.read_csv(METRICS / "walkforward_per_fold.csv")
     sub = per_fold[per_fold["target"] == target]
     wide = sub.pivot_table(index="fold", columns="model", values=METRIC).sort_index()
@@ -103,68 +45,86 @@ def main():
         raise SystemExit(f"{BASELINE} not found for {target}")
 
     rng = np.random.default_rng(SEED)
-    models = [m for m in ["LogisticRegression", "LightGBM", "XGBoost", "HAR"] if m in wide.columns]
-
     rows = []
-    for m in models:
+    for m in [m for m in MODELS if m in wide.columns]:
         paired = wide[[m, BASELINE]].dropna()
         diff = (paired[m] - paired[BASELINE]).to_numpy()
         fold_ids = paired.index.to_numpy()
-        n = len(diff)
-
-        if n < 2:
+        if len(diff) < 2:
             warnings.warn(
-                f"Only {n} paired fold(s) for {m} vs {BASELINE}, statistics undefined.",
+                f"Only {len(diff)} paired fold(s) for {m} vs {BASELINE}, statistics undefined.",
                 RuntimeWarning,
             )
-            rows.append({
-                "target": target, "metric": METRIC, "model": m, "vs": BASELINE,
-                "mean_diff": round(float(diff.mean()), 4) if n else np.nan, "n_folds": n,
-                "fold_autocorr": np.nan, "n_eff": np.nan,
-                "t_naive": np.nan, "t_effN": np.nan,
-                "block_boot_ci_lo": np.nan, "block_boot_ci_hi": np.nan,
-                "block_boot_p": np.nan,
-            })
-            continue
-
-        mean_d = diff.mean()
-
-        rho = lag1_autocorr(diff, fold_ids=fold_ids)
-        # AR(1) effective sample size in the form of Bretherton et al. (1999). Negative
-        # rho estimates are clipped to zero so the adjustment can only shrink n and the
-        # effective-N test stays at least as strict as the naive t.
-        rho_pos = max(rho, 0.0)
-        n_eff = n * (1 - rho_pos) / (1 + rho_pos)
-        se_naive = diff.std(ddof=1) / np.sqrt(n)
-        se_eff = diff.std(ddof=1) / np.sqrt(max(n_eff, 2))
-        t_naive = mean_d / se_naive if se_naive > 0 else np.nan
-        t_eff = mean_d / se_eff if se_eff > 0 else np.nan
-
-        boot = moving_block_bootstrap_mean(diff, rng, fold_ids=fold_ids)
-        ci_lo, ci_hi = np.percentile(boot, [2.5, 97.5])
-        tail = min((boot <= 0).mean(), (boot >= 0).mean())
-        # Cap at 1 because resampled means tying at exactly zero land in both tails,
-        # and floor at 1/B because B resamples cannot resolve a smaller two-tailed p.
-        p_boot = min(1.0, max(2 * tail, 1 / len(boot)))
-
+        s = paired_edge_stats(diff, fold_ids, rng)
         rows.append({
             "target": target, "metric": METRIC, "model": m, "vs": BASELINE,
-            "mean_diff": round(mean_d, 4), "n_folds": n, "fold_autocorr": round(rho, 3),
-            "n_eff": round(n_eff, 1),
-            "t_naive": round(t_naive, 2), "t_effN": round(t_eff, 2),
-            "block_boot_ci_lo": round(ci_lo, 4), "block_boot_ci_hi": round(ci_hi, 4),
-            "block_boot_p": round(p_boot, 4),
+            "mean_diff": _round(s["mean_diff"], 4), "n_folds": s["n_folds"],
+            "fold_autocorr": _round(s["fold_autocorr"], 3), "n_eff": _round(s["n_eff"], 1),
+            "t_naive": _round(s["t_naive"], 2), "t_effN": _round(s["t_effN"], 2),
+            "block_boot_ci_lo": _round(s["ci_lo"], 4), "block_boot_ci_hi": _round(s["ci_hi"], 4),
+            "block_boot_p": _round(s["p"], 4),
         })
+    return pd.DataFrame(rows)
 
-    out = pd.DataFrame(rows)
-    out.to_csv(METRICS / "significance.csv", index=False)
+
+def date_block_table(target):
+    """Date-block bootstrap of the pooled PR-AUC edge, the cross-sectional comparison."""
+    oof = pd.read_csv(METRICS / "oof_predictions.csv", parse_dates=["Date"])
+    if not {"Date", "Ticker"}.issubset(oof.columns):
+        raise SystemExit(
+            "oof_predictions.csv has no Date and Ticker columns. Re-run scripts/run_evaluation.py, "
+            "which now carries them so the cross-sectional bootstrap can cluster by date."
+        )
+    sub = oof[oof["target"] == target]
+    base = sub[sub["model"] == BASELINE][["Date", "Ticker", "y_proba"]].rename(
+        columns={"y_proba": "score_naive"}
+    )
+    if base.empty:
+        raise SystemExit(f"No {BASELINE} out-of-fold predictions for {target}.")
+
+    rng = np.random.default_rng(SEED)
+    rows = []
+    for m in [m for m in MODELS if m in sub["model"].unique()]:
+        mod = sub[sub["model"] == m][["Date", "Ticker", "fold", "y_true", "y_proba"]].rename(
+            columns={"y_proba": "score_model"}
+        )
+        joined = mod.merge(base, on=["Date", "Ticker"], how="inner")
+        if joined.empty or joined["y_true"].nunique() < 2:
+            continue
+        r = date_block_bootstrap_edge(
+            joined["Date"].to_numpy(), joined["fold"].to_numpy(), joined["y_true"].to_numpy(),
+            joined["score_model"].to_numpy(), joined["score_naive"].to_numpy(),
+            rng, n_boot=N_BOOT_XS, block=DATE_BLOCK,
+        )
+        rows.append({
+            "target": target, "metric": METRIC, "model": m, "vs": BASELINE, "method": "date_block",
+            "edge": round(r["edge"], 4), "ci_lo": round(r["ci_lo"], 4), "ci_hi": round(r["ci_hi"], 4),
+            "p": round(r["p"], 4), "n_dates": r["n_dates"], "n_rows": len(joined), "n_boot": r["n_boot"],
+        })
+    return pd.DataFrame(rows)
+
+
+def main():
+    """Write the fold-block and date-block significance tables for the config target."""
+    target = (load_config().get("data") or {}).get("target", "FwdVolRegime")
+
+    fold = fold_block_table(target)
+    fold.to_csv(METRICS / "significance.csv", index=False)
+
+    date = date_block_table(target)
+    date.to_csv(METRICS / "significance_crosssectional.csv", index=False)
+
     pd.set_option("display.width", 160)
-    print(f"Model minus {BASELINE} on {target} {METRIC} (positive = model wins):\n")
-    print(out.to_string(index=False))
-    print("\nRead: the naive t treats every fold as independent; effective-N and the moving-block")
-    print("bootstrap account for fold serial correlation. A block-bootstrap CI that includes 0")
-    print("means the edge over the matched naive baseline is not statistically decisive.")
-    return out
+    print(f"Model minus {BASELINE} on {target} {METRIC} (positive = model wins).\n")
+    print("Fold-block bootstrap (serial correlation across folds only):")
+    print(fold.to_string(index=False))
+    print(f"\nDate-block bootstrap (date clusters, block {DATE_BLOCK} trading days, "
+          f"{N_BOOT_XS} resamples), the cross-sectional-aware primary:")
+    print(date.to_string(index=False))
+    print("\nRead: the date-block bootstrap resamples whole trading dates, so the 14 co-moving")
+    print("tickers count as one cross-section rather than 14 independent draws. It is the primary")
+    print("reading, and its larger p-value than the fold-block test is the honest cost of that.")
+    return fold, date
 
 
 if __name__ == "__main__":

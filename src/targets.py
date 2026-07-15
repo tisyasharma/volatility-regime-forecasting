@@ -2,7 +2,7 @@
 Prediction targets and the matched naive baseline.
 
 NextVolSpike labels whether tomorrow's 10-day rolling volatility exceeds its expanding
-80th percentile; the rolling windows at t and t+1 overlap by nine days. FwdVolRegime
+80th percentile. The rolling windows at t and t+1 overlap by nine days. FwdVolRegime
 labels whether volatility over the next 10 trading days, a window disjoint from the
 features known at t, exceeds the same threshold. The matched naive baseline predicts a
 regime whenever today's rolling volatility already sits above the per-ticker expanding
@@ -75,3 +75,38 @@ def matched_naive_predict(df_slice):
     pred = df_slice["currently_high"].to_numpy()
     ratio = (df_slice["RollingVol"] / df_slice["vol_threshold"]).to_numpy()
     return pred, ratio
+
+
+def grid_regime_columns(df, forward_window, quantile, min_periods=126):
+    """
+    Regime label, matched naive signal, and purge date for one forward window and quantile,
+    recomputed leakage-safely from returns. Pass a frame with full warm-up history (the raw
+    download) so the expanding threshold starts on time. Assumes date-ordered rows per ticker.
+
+    The threshold is the expanding quantile of the trailing forward_window-day realized
+    volatility, so the regime is defined on the same horizon it forecasts and the base rate is
+    governed by the quantile rather than a fixed 10-day calibration. At forward_window=10 and
+    quantile=0.8 this reproduces the persisted vol_threshold and FwdVolRegime.
+    """
+    df = df.copy()
+    ret = df.groupby("Ticker")["Return"]
+    df["grid_trailing_vol"] = ret.transform(lambda r: r.rolling(forward_window).std())
+    df["grid_threshold"] = df.groupby("Ticker")["grid_trailing_vol"].transform(
+        lambda s: s.shift(1).expanding(min_periods=min_periods).quantile(quantile)
+    )
+    df["grid_forward_vol"] = ret.transform(
+        lambda r: r.rolling(forward_window).std().shift(-forward_window)
+    )
+    df["grid_regime"] = np.where(
+        df["grid_forward_vol"].isna() | df["grid_threshold"].isna(),
+        np.nan,
+        (df["grid_forward_vol"] > df["grid_threshold"]).astype(float),
+    )
+    df["grid_currently_high"] = np.where(
+        df["grid_threshold"].isna(),
+        np.nan,
+        (df["grid_trailing_vol"] > df["grid_threshold"]).astype(float),
+    )
+    df["grid_naive_ratio"] = df["grid_trailing_vol"] / df["grid_threshold"]
+    df["grid_label_end"] = df.groupby("Ticker")["Date"].shift(-forward_window)
+    return df

@@ -62,7 +62,7 @@ def _order(models):
 
 
 def target_reversal():
-    """Compare PR-AUC across models: the matched naive baseline scores highest on the next-day target and the learned models score highest on the forward target."""
+    """Compare PR-AUC across models. The matched naive baseline scores highest on the next-day target and the learned models score highest on the forward target."""
     s = _summary()
     fig, axes = plt.subplots(1, 2, figsize=(13, 5.2), sharey=True)
     panels = [(NEXTDAY, "Next-day spike (overlapping-window target)"),
@@ -91,7 +91,7 @@ def target_reversal():
     axes[0].set_ylabel("PR-AUC (mean across folds)", fontweight="bold")
     if omitted_all:
         fig.text(0.125, -0.18,
-                 f"{', '.join(sorted(omitted_all))} omitted: hard 0/1 labels have no ranking score",
+                 f"{', '.join(sorted(omitted_all))} omitted, no ranking score for hard 0/1 labels",
                  fontsize=8.5, color="#555")
     fig.suptitle("PR-AUC by model on the next-day and forward volatility targets",
                  fontweight="bold", fontsize=12)

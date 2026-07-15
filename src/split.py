@@ -25,13 +25,13 @@ def generate_expanding_window_splits(
     """
     Generate expanding-window walk-forward splits over the observed trading calendar.
 
-    Training starts at train_start and grows; each test window spans test_size_days
+    Training starts at train_start and grows. Each test window spans test_size_days
     consecutive trading dates starting the day after the training window and advancing by
     step_size_days per fold. All window sizes count unique trading dates present in the data,
     and folds with fewer than min_train_size_days training dates are skipped.
 
     A final window shorter than test_size_days is kept by default (flagged with a RuntimeWarning)
-    so the newest data is still evaluated; pass include_partial=False to drop it.
+    so the newest data is still evaluated. Pass include_partial=False to drop it.
 
     Returns (train_start, train_end, test_start, test_end) date strings per fold, with train_end
     the last trading date before test_start so the inclusive ranges are disjoint by construction.

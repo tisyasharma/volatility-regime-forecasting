@@ -1,17 +1,18 @@
 # Entry points for the project. src/ holds the importable library, these targets
 # run the scripts/ that orchestrate it. Run `make help` to list targets.
 
-.PHONY: help install results evaluate significance operating_points figures model verify_vol_threshold test clean
+.PHONY: help install results evaluate significance operating_points figures model sensitivity_grid verify_vol_threshold test clean
 
 help:
 	@echo "make install           install dependencies"
 	@echo "make test              run the test suite"
 	@echo "make results           script pipeline: evaluation, significance, operating points, metrics figures"
 	@echo "make evaluate          walk-forward evaluation -> reports/metrics/"
-	@echo "make significance      dependence-aware inference -> reports/metrics/"
+	@echo "make significance      dependence-aware significance testing -> reports/metrics/"
 	@echo "make operating_points  alert-budget operating points -> reports/metrics/"
 	@echo "make figures           render metrics figures -> reports/figures/ (SHAP and calibration figures come from notebook 03)"
 	@echo "make model             train and save the final model -> models/artifacts/"
+	@echo "make sensitivity_grid  threshold and horizon robustness grid -> reports/metrics/, reports/figures/"
 	@echo "make verify_vol_threshold  derive, verify, and persist the label threshold into the dataset CSVs"
 	@echo "make clean             remove regenerable artifacts (oof predictions, saved model)"
 
@@ -40,6 +41,9 @@ figures:
 
 model:
 	python scripts/save_model.py
+
+sensitivity_grid:
+	python scripts/sensitivity_grid.py
 
 # Rewrites both dataset CSVs in place after verifying the threshold reproduces the labels.
 verify_vol_threshold:

@@ -1,0 +1,5 @@
+target,metric,model,vs,method,edge,ci_lo,ci_hi,p,n_dates,n_rows,n_boot
+FwdVolRegime,pr_auc,LogisticRegression,MatchedNaive,date_block,0.0335,0.0093,0.0474,0.0093,1763,24682,3000
+FwdVolRegime,pr_auc,LightGBM,MatchedNaive,date_block,0.0262,0.0013,0.0452,0.042,1763,24682,3000
+FwdVolRegime,pr_auc,XGBoost,MatchedNaive,date_block,0.0156,-0.0082,0.0331,0.2047,1763,24682,3000
+FwdVolRegime,pr_auc,HAR,MatchedNaive,date_block,-0.0116,-0.0251,0.0023,0.1033,1763,24682,3000
