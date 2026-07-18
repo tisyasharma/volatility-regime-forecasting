@@ -1,227 +1,304 @@
 # Methodology and Results
 
-The detailed reasoning, evaluation design, and full results behind the [README](../README.md).
-Here we cover why volatility is the target, the model comparison on both targets, dependence-aware
-significance, operating points, explainability, calibration, and the leakage controls.
+This document provides the complete analytical rationale, validation design, results, and limitations behind the [project README](../README.md).
 
-## Choosing volatility over direction
+The study asks whether information available at the close of trading day `t` can rank which equity-days will enter a high-volatility regime over the next 10 trading days, once overlapping windows, naive persistence, temporal dependence, and cross-sectional co-movement are handled explicitly.
 
-The most common framing for equity prediction is next-day direction, whether the stock rises
-or falls tomorrow. The EDA shows that framing offers little predictable signal. Across the 14
-tickers, daily returns have almost no autocorrelation, and the direction label carries a
-persistent upward drift of 52.8% up-days with no conditional signal beyond it, so direction
-modeling was not pursued. That is consistent with the weak form of the efficient market
-hypothesis.
+## 1. Study motivation
 
-Volatility behaves differently here. The autocorrelation of absolute daily returns, the standard
-volatility-clustering measure (Cont 2001), sits near 0.236 at a one-day lag in this data and
-decays only slowly, while raw returns sit near zero at every lag. A rolling-window measure
-would show more, but mostly as an artifact of overlapping windows. That difference defines the
-target, **whether the next 10 trading days are a high-volatility regime**, meaning volatility
-above its own historical 80th percentile.
+The initial exploratory analysis considered next-day return direction. Across the 14 equities, the direction label is positive on 52.8% of observations, reflecting a persistent upward drift, while raw daily returns show little serial dependence that would support a useful conditional forecast.
 
-![Mean autocorrelation of absolute returns and returns across 14 tickers](../reports/figures/autocorrelation.png)
+Volatility behaves differently. Absolute daily returns have positive short-lag autocorrelation, around 0.24 at a one-day lag and slow to decay, consistent with volatility clustering (Cont, 2001). That persistence motivates a volatility target, but it also creates the main methodological risk: a model can appear predictive when the target largely repeats information already present in the feature window.
 
-## Evaluation design
+![Mean autocorrelation of absolute returns and raw returns across 14 equities](../reports/figures/autocorrelation.png)
 
-When a one-line naive rule alone nearly saturates a metric, high scores on it measure
-autocorrelation rather than skill. Every model is therefore run against a **matched naive
-baseline**, which predicts a regime whenever today's volatility already exceeds the same
-per-ticker threshold that defines the label. Two targets are evaluated.
+The project therefore treats target construction and baseline selection as part of the forecasting problem rather than as preprocessing details.
 
-- **NextVolSpike (next-day):** the 10-day rolling volatility at `t` and `t+1` overlap by nine
-  days, so this target is close to a restatement of today's regime. It is retained as the
-  negative control.
-- **FwdVolRegime (next 10 days):** volatility over the next 10 trading days, a window disjoint
-  from the features. This is a genuine forecast, and the target the saved model and
-  explainability use.
+## 2. Data and features
 
-Metrics are precision, recall, F1, and PR-AUC. The label is imbalanced, so accuracy is
-misleading. Results are averaged across the walk-forward folds, 28 for the forward target and
-29 for the next-day one. The majority and persistence baselines output hard 0/1 labels with no
-ranking score, so PR-AUC is undefined for them (shown as n/a), and the majority baseline's
-precision is reported as 0.00 by convention.
+The processed dataset contains **37,002 model-ready equity-day observations** from **2015-07-20 through 2026-01-21** across 14 U.S. equities:
 
-## Results
+- technology: AAPL, MSFT, AMZN, GOOGL, NVDA, TSLA;
+- finance: JPM;
+- retail: WMT;
+- airlines: DAL, UAL;
+- defense: LMT, RTX, NOC;
+- energy: XOM.
 
-![PR-AUC by model on the next-day and forward volatility targets](../reports/figures/target_reversal.png)
+Daily OHLCV data and VIX were collected through `yfinance`. Nine features are used, all known at time `t`:
 
-Error bars in this figure show one standard deviation of PR-AUC across folds, a dispersion
-summary rather than a confidence interval. The paired model-versus-naive tests are in the
-significance section below.
+1. `Return`
+2. `RollingVol`
+3. `RSI`
+4. `Price_to_SMA20`
+5. `Price_to_SMA50`
+6. `SMA20_to_SMA50`
+7. `Volume_Z`
+8. `VIX`
+9. `Lagged_Return`
 
-**Next-day target.** The matched naive rule and a HAR forecast both reach PR-AUC near 0.90
-against a no-skill floor near 0.27, and the learned models sit well below. High scores here
-mostly restate today's regime.
+The complete provenance, raw and processed row counts, label definitions, and representation gaps are documented in the [dataset card](../reports/dataset_card.md).
 
-| Model | Precision | Recall | F1 | PR-AUC |
+## 3. Regime threshold and prediction targets
+
+A per-ticker expanding 80th-percentile threshold defines a high-volatility regime. The threshold is computed from historical `RollingVol` values with `shift(1)` and a minimum history of 126 observations. The threshold at time `t` therefore excludes volatility from `t` and all future dates.
+
+The result is persisted as `vol_threshold` in the raw and processed datasets. Target construction, the matched naive baseline, and the HAR benchmark reuse this stored column. Persisting it prevents downstream code from silently recalculating the threshold on a warm-up-trimmed or evaluation-specific sample.
+
+Two targets are evaluated.
+
+### `NextVolSpike`: overlapping negative control
+
+`NextVolSpike` is positive when tomorrow's 10-day rolling volatility exceeds the stored threshold. The rolling-volatility windows at `t` and `t+1` share nine of ten daily returns. This target is retained to demonstrate how window overlap can convert persistence into an apparently strong prediction task.
+
+The full-sample positive rate is approximately 25.2%.
+
+### `FwdVolRegime`: forward-disjoint primary target
+
+`FwdVolRegime` is positive when volatility over the next 10 trading days exceeds the same stored threshold. The future window covers `t+1` through `t+10` and is disjoint from the current 10-day rolling-volatility feature window. The correlation between current rolling volatility and the labeled quantity falls from 0.957 for the overlapping next-day target to 0.471 for this forward target, so performance reflects forward ranking rather than a near-restatement of a feature.
+
+The full-sample positive rate is approximately 25.4%. This is the target used for model selection, the saved artifact, sensitivity analysis, and the primary interpretation.
+
+## 4. Models and baselines
+
+All models are trained and evaluated through shared code paths in `src/modeling.py`.
+
+### Baselines and benchmark
+
+- **Majority:** always predicts the majority class.
+- **Persistence:** predicts a regime when current `RollingVol` exceeds a pooled 80th-percentile threshold estimated from the training fold. It outputs hard labels and is evaluated with precision, recall, and F1 only.
+- **Matched naive:** predicts a regime when current volatility already exceeds the same stored per-ticker threshold used by the label. Its continuous ranking score is `RollingVol / vol_threshold`.
+- **HAR:** an econometric volatility benchmark in the spirit of HAR-RV (Corsi, 2009). It uses current 10-day rolling volatility and its trailing 5- and 22-day means, then compares the forecast with the same stored threshold used by the target.
+
+The matched naive rule is the primary baseline because it captures current volatility persistence on the same threshold definition as the label.
+
+### Learned models
+
+- logistic regression with balanced class weights and a training-fold-only `StandardScaler`;
+- LightGBM with balanced class weights;
+- XGBoost with `scale_pos_weight` derived from the class ratio in each training fold.
+
+Hyperparameters are centralized in [`config.yaml`](../config.yaml). Random seed 42 is used for the learned models.
+
+## 5. Walk-forward validation
+
+The primary evaluation uses expanding-window walk-forward validation:
+
+- training begins on 2015-07-20;
+- the initial training period ends on 2018-12-31;
+- each full test window spans 63 trading days;
+- test windows do not overlap;
+- training expands after every fold;
+- the forward target produces 28 usable folds;
+- the next-day target produces 29 usable folds, including a final nine-trading-day partial window.
+
+### Horizon-exact purge
+
+Each row stores the trading date on which its label window ends. Before a fold is fit, the purge removes every training row whose label window reaches the test period (López de Prado, 2018). This prevents training labels from containing returns observed during the test window.
+
+The purge is implemented in `src/split.py` and called by `scripts/run_evaluation.py`. [`tests/test_split.py`](../tests/test_split.py) asserts:
+
+- temporal ordering;
+- zero train-test row overlap;
+- exact purge boundaries;
+- exclusion of incomplete labels;
+- minimum training-window size;
+- handling of the final partial fold;
+- agreement between target label-end dates and split logic.
+
+A separate embargo after the test window is unnecessary because the expanding design never trains on observations that follow an earlier test window.
+
+### Train-only preprocessing
+
+The logistic-regression scaler is fitted on each training fold and then applied to the corresponding test fold. Test observations do not influence the scaling parameters.
+
+## 6. Evaluation metrics
+
+The target is imbalanced, so accuracy is not used as a primary metric. Reported metrics are precision, recall, F1, and **average precision (AP)**.
+
+The metric field remains named `pr_auc` in the existing CSV files and plots, but the implementation computes it with scikit-learn's `average_precision_score`. Average precision is therefore the technically exact term used in this documentation.
+
+Majority and persistence produce hard labels without a continuous ranking score. AP is reported as `n/a` for those models rather than being calculated from fabricated probabilities.
+
+## 7. Model comparison
+
+![Model comparison on the overlapping next-day target and the forward-disjoint target](../reports/figures/target_reversal.png)
+
+The figure's error bars show one standard deviation across walk-forward folds. They summarize dispersion and are not confidence intervals.
+
+### Next-day negative control
+
+| Model | Precision | Recall | F1 | Average precision |
 |---|---:|---:|---:|---:|
-| Majority | 0.00 | 0.00 | 0.00 | n/a |
-| Persistence (pooled fixed threshold) | 0.60 | 0.63 | 0.60 | n/a |
-| **Matched naive** | **0.87** | **0.88** | **0.87** | **0.90** |
-| HAR | 0.87 | 0.87 | 0.87 | 0.90 |
-| Logistic Regression | 0.52 | 0.84 | 0.63 | 0.68 |
-| LightGBM | 0.52 | 0.89 | 0.64 | 0.70 |
-| XGBoost | 0.56 | 0.84 | 0.66 | 0.71 |
+| Majority | 0.0000 | 0.0000 | 0.0000 | n/a |
+| Persistence | 0.5988 | 0.6273 | 0.6009 | n/a |
+| **Matched naive** | **0.8709** | **0.8752** | **0.8729** | **0.9008** |
+| HAR | 0.8742 | 0.8684 | 0.8711 | 0.9008 |
+| Logistic regression | 0.5235 | 0.8376 | 0.6307 | 0.6762 |
+| LightGBM | 0.5203 | 0.8875 | 0.6392 | 0.7050 |
+| XGBoost | 0.5597 | 0.8418 | 0.6567 | 0.7100 |
 
-**Forward target.** All scores drop toward the base rate because a 10-day-ahead regime is
-difficult to forecast, but here the learned models edge above the matched naive baseline.
+The matched naive rule and HAR both reach AP near 0.90 and outperform every learned model. Because the current and next-day rolling-volatility windows share nine returns, this result primarily measures overlap and persistence rather than genuine forward skill.
 
-| Model | Precision | Recall | F1 | PR-AUC |
+### Forward-disjoint target
+
+| Model | Precision | Recall | F1 | Average precision |
 |---|---:|---:|---:|---:|
-| Majority | 0.00 | 0.00 | 0.00 | n/a |
-| Persistence (pooled fixed threshold) | 0.33 | 0.33 | 0.32 | n/a |
-| HAR | 0.30 | 0.26 | 0.26 | 0.32 |
-| Matched naive | 0.32 | 0.32 | 0.32 | 0.33 |
-| XGBoost | 0.33 | 0.44 | 0.36 | 0.35 |
-| LightGBM | 0.33 | 0.50 | 0.38 | 0.36 |
-| **Logistic Regression** | 0.32 | 0.55 | **0.38** | **0.37** |
+| Majority | 0.0000 | 0.0000 | 0.0000 | n/a |
+| Persistence | 0.3324 | 0.3271 | 0.3238 | n/a |
+| HAR | 0.2956 | 0.2563 | 0.2644 | 0.3226 |
+| Matched naive | 0.3157 | 0.3213 | 0.3155 | 0.3342 |
+| XGBoost | 0.3276 | 0.4400 | 0.3620 | 0.3499 |
+| LightGBM | 0.3300 | 0.5017 | 0.3805 | 0.3604 |
+| **Logistic regression** | **0.3164** | **0.5450** | **0.3849** | **0.3677** |
 
-A ranker with no skill scores a PR-AUC equal to the positive-class share, about 0.27 in the
-test windows, and the relevant comparison is the matched naive baseline at 0.33. The lift is
-small, so the test is whether it survives dependence-aware significance testing.
+The mean positive-class prevalence across forward test windows is approximately 0.27, which is the expected AP of an unskilled ranker. The matched naive baseline at 0.3342 is the more informative comparison because it represents the persistence already available at time `t`.
 
-## Significance testing
+Logistic regression improves AP by **0.0335** over that baseline.
 
-Per-fold metrics are not independent. Volatility clusters in time and the 14 tickers co-move,
-so treating the folds as independent draws overstates confidence. A moving-block bootstrap over
-folds with an effective-sample-size adjustment (`scripts/significance.py`) tests each model
-against the matched naive baseline on the forward target.
+## 8. Dependence-aware inference
 
-The linear model clears the bar. It adds +0.034 PR-AUC over the matched naive baseline, 95% CI
-[0.014, 0.061], block-bootstrap p=0.002, holding under the stricter effective-N t-test (t=2.7
-on about 21 effective folds). LightGBM (+0.026, p=0.036 at the chosen block length) is
-borderline in the block bootstrap and stays marginal under the effective-N test. XGBoost
-(+0.016, p=0.23) does not clear it. HAR trails the naive rule (block-bootstrap p=0.04), a
-deficit that is itself marginal under the effective-N test (t=-1.9, p about 0.08). These
-p-values are unadjusted for the three learned models tested, and under a Holm correction the
-linear result stays significant (p=0.0066) while the LightGBM result does not.
+Per-fold scores are not independent. Volatility clusters over time, and the 14 equities co-move. Two resampling analyses test each model's AP edge over the matched naive baseline.
 
-That fold-block bootstrap corrects for serial correlation but still counts the 14 co-moving
-tickers as independent within each fold. A second bootstrap resamples whole trading dates in
-21-day blocks so each drawn date carries its full cross-section, which is the primary reading
-(`reports/metrics/significance_crosssectional.csv`). The linear model holds under it at +0.034
-PR-AUC, 95% CI [0.009, 0.047], p=0.009, and clears the Holm correction across the three learned
-models (p=0.028). Counting the cross-section honestly raises the p-value from 0.002 to 0.009.
-LightGBM slips to borderline (p=0.042) and the small HAR deficit is no longer significant
-(p=0.10), so the logistic regression is the only model whose edge survives the
-cross-sectional-aware test.
+### Fold-block bootstrap
 
-![Per-fold F1 over time for the key models](../reports/figures/f1_by_fold.png)
+A moving-block bootstrap over ordered folds addresses serial dependence across test windows. An effective-sample-size adjustment provides an additional serial-correlation check.
 
-## Threshold and horizon sensitivity
+| Model | AP edge | 95% block-bootstrap CI | Block-bootstrap p |
+|---|---:|---:|---:|
+| Logistic regression | 0.0335 | [0.0136, 0.0605] | 0.0022 |
+| LightGBM | 0.0262 | [0.0019, 0.0596] | 0.0358 |
+| XGBoost | 0.0156 | [-0.0139, 0.0522] | 0.2301 |
+| HAR | -0.0116 | [-0.0219, -0.0006] | 0.0395 |
 
-The headline fixes the regime at the 80th percentile over a 10-day window, so the edge should be
-checked against other choices. `scripts/sensitivity_grid.py` sweeps the quantile over 0.70, 0.80,
-and 0.90 and the horizon over 5, 10, and 21 trading days, recomputing the leakage-safe threshold
-in each cell so the base rate tracks the quantile and the cells stay comparable. The (0.80, 10)
-cell reproduces the headline edge and anchors the grid.
+Logistic regression remains significant after Holm correction across the three learned models, with adjusted p=0.0066. LightGBM does not remain significant after correction.
 
-![Logistic regression edge over the matched naive baseline by threshold and horizon](../reports/figures/sensitivity_grid.png)
+This analysis corrects serial dependence but still treats the cross-section within each fold too optimistically.
 
-The edge is strongest and significant at the 5-day horizon, above +0.04 at every quantile, and
-holds at the 10-day horizon for the 0.70 and 0.80 quantiles, +0.038 and +0.033.
-The one 10-day cell that misses significance is the 0.90 quantile, where the regime is rarest
-(+0.027, p=0.06), and no cell is significant at the 21-day horizon, where only +0.014 remains at
-the headline threshold. The result holds for short horizons at moderate thresholds and should not
-be read as horizon-agnostic.
+### Date-block bootstrap
 
-## Operating points
+The primary inference resamples complete trading dates in 21-day blocks. Each sampled date carries its full cross-section of equities, so the 14 co-moving names are not counted as independent observations.
 
-PR-AUC compares rankers without committing to a cutoff, but using the forecast means picking
-one. The class-weighted models overstate the regime probability (see Calibration), so instead
-of a probability cutoff the comparison spends a fixed alert budget, flagging the top N% of
-ticker-days by score (`scripts/operating_points.py`, budgets from 5% to 30% in
-`reports/metrics/operating_points.csv`). At a 20% budget the logistic regression catches 47% of
-regime ticker-days at 62% precision, against 39% at 53% for the matched naive rule on the same
-budget, and it wins on both axes at every budget in the sweep.
+| Model | AP edge | 95% date-block CI | Unadjusted p |
+|---|---:|---:|---:|
+| Logistic regression | 0.0335 | [0.0093, 0.0474] | 0.0093 |
+| LightGBM | 0.0262 | [0.0013, 0.0452] | 0.0420 |
+| XGBoost | 0.0156 | [-0.0082, 0.0331] | 0.2047 |
+| HAR | -0.0116 | [-0.0251, 0.0023] | 0.1033 |
 
-The pooled numbers hide dispersion. Alerts concentrate in turbulent stretches and the refit fold
-models score on drifting probability scales, so at the 20% cutoff the per-window alert rate runs
-from 0% to 98% and false alarms per 63-day window range from 0 to 263 with a median of 30. A
-live rule would need a trailing-quantile cutoff rather than these retrospective pooled values.
-The table lists candidate tradeoffs, not a tuned operating point, and re-picking a row after
-seeing it would be selection on the test set.
+The primary logistic-regression comparison uses 24,682 out-of-fold rows across 1,763 distinct trading dates and 3,000 bootstrap resamples.
 
-## Explainability
+After Holm correction across logistic regression, LightGBM, and XGBoost:
 
-`notebooks/03_explainability.ipynb` trains XGBoost on the forward target through 2022 and
-computes SHAP on the 2023-onward holdout. The market's implied-volatility gauge, VIX, is the
-dominant driver, roughly a third of total attribution in every regime (29% calm, 35% normal,
-33% turbulent). Current realized volatility is a clear second in the calm and turbulent thirds,
-though it falls to fifth in the normal third. To forecast the regime ten days out, the model
-relies on the forward-looking signal. The effect direction is monotonic and economically
-sensible, high VIX and high current volatility both push the forecast toward the regime, as the
-beeswarm shows. The logistic regression champion is read the same way through its standardized
-coefficients. VIX and current volatility take stable positive weights, the same direction as the
-SHAP, while the three price-to-moving-average ratios carry large offsetting coefficients that
-reflect their near-collinearity rather than standalone importance. That collinearity is why the
-tree SHAP, robust to it, ranks VIX and volatility on top instead.
+- logistic regression remains significant at adjusted p=0.028;
+- LightGBM does not remain significant;
+- XGBoost is not significant.
 
-![SHAP attribution by volatility regime](../reports/figures/shap_by_regime.png)
+Logistic regression is therefore the only learned model whose improvement survives both the primary cross-sectional-aware test and multiple-comparison correction.
+
+## 9. Threshold and horizon sensitivity
+
+The headline target uses an 80th-percentile threshold and a 10-trading-day horizon. `scripts/sensitivity_grid.py` recomputes the leakage-safe target and matched naive baseline for thresholds at the 70th, 80th, and 90th percentiles and horizons of 5, 10, and 21 trading days.
+
+![Logistic-regression edge over the matched naive baseline by threshold and horizon](../reports/figures/sensitivity_grid.png)
+
+| Threshold | Horizon | Logistic AP | Naive AP | AP edge | 95% CI | p |
+|---:|---:|---:|---:|---:|---:|---:|
+| 0.70 | 5 | 0.4938 | 0.4533 | 0.0405 | [0.0218, 0.0659] | 0.0002 |
+| 0.80 | 5 | 0.3773 | 0.3303 | 0.0470 | [0.0254, 0.0735] | 0.0003 |
+| 0.90 | 5 | 0.2376 | 0.1908 | 0.0468 | [0.0198, 0.0617] | 0.0001 |
+| 0.70 | 10 | 0.4980 | 0.4603 | 0.0377 | [0.0164, 0.0625] | 0.0008 |
+| 0.80 | 10 | 0.3678 | 0.3344 | 0.0334 | [0.0138, 0.0609] | 0.0018 |
+| 0.90 | 10 | 0.2347 | 0.2072 | 0.0274 | [-0.0011, 0.0504] | 0.0611 |
+| 0.70 | 21 | 0.4886 | 0.4863 | 0.0023 | [-0.0213, 0.0273] | 0.7039 |
+| 0.80 | 21 | 0.3588 | 0.3446 | 0.0142 | [-0.0047, 0.0387] | 0.1290 |
+| 0.90 | 21 | 0.2204 | 0.1923 | 0.0281 | [-0.0081, 0.0568] | 0.1191 |
+
+The edge is consistently significant at the 5-day horizon. It remains significant at the 10-day horizon for the 70th and 80th percentile thresholds, but not for the rarer 90th percentile. No 21-day configuration reaches significance.
+
+The result should therefore be interpreted as a short-horizon finding rather than a general volatility signal at arbitrary horizons.
+
+## 10. Operating points
+
+Average precision evaluates ranking quality without selecting a cutoff. A practical alert system would still need to decide how many equity-days to flag.
+
+Because class-weighted model outputs are not well calibrated, `scripts/operating_points.py` compares score-quantile alert budgets from 5% through 30% instead of treating raw scores as probabilities.
+
+At a pooled 20% alert budget:
+
+| Model | Precision | Recall | F1 |
+|---|---:|---:|---:|
+| Logistic regression | 0.6226 | 0.4651 | 0.5325 |
+| Matched naive | 0.5285 | 0.3948 | 0.4519 |
+
+Logistic regression has higher precision and recall than the matched naive rule at every tested pooled budget.
+
+These values are retrospective comparisons, not a selected production threshold. At the pooled 20% cutoff, logistic-regression alert rates vary from 0% to 98.07% across folds, with a median of 5.44%. False positives range from 0 to 263 per test window, with a median of 30. A live alert system would require a trailing or fold-local threshold and prospective validation.
+
+## 11. Explainability
+
+The champion logistic-regression model is interpreted through standardized coefficients across walk-forward folds. VIX and current rolling volatility receive stable positive weights. The three price-to-moving-average ratios carry large offsetting coefficients, consistent with their strong collinearity rather than independent effects.
+
+`notebooks/03_explainability.ipynb` also trains XGBoost through 2022 and computes SHAP values on a 2023-onward holdout. XGBoost is used for nonlinear supporting analysis rather than as a substitute explanation for the logistic-regression champion.
+
+Across the holdout:
+
+- VIX is the dominant SHAP feature, accounting for roughly one-third of total attribution in each observed volatility regime (29% calm, 35% normal, 33% turbulent);
+- current rolling volatility is a clear second in the calm and turbulent thirds but falls to fifth in the normal third, behind the technical ratios;
+- high VIX and high current volatility push predictions toward the high-volatility class.
+
+![SHAP attribution by observed volatility regime](../reports/figures/shap_by_regime.png)
 
 ![SHAP impact and direction on the 2023-onward holdout](../reports/figures/shap_beeswarm.png)
 
-![Logistic regression standardized coefficients across walk-forward folds](../reports/figures/logreg_coefficients.png)
+![Logistic-regression standardized coefficients across walk-forward folds](../reports/figures/logreg_coefficients.png)
 
-## Calibration
+SHAP values explain XGBoost's behavior only. They are supporting evidence about nonlinear feature use, not an attribution of the saved logistic-regression model.
 
-Because the label is imbalanced, calibration matters as much as ranking. All three learned
-models are class-weighted for recall, and the two measured on the 2023-onward holdout overstate
-the regime probability. XGBoost forecasts 0.37 on average and LightGBM 0.40 against an actual
-rate of about 0.17 (Brier 0.18 and 0.19). Isotonic calibration fit on a held-out, purged 2022
-slice improves LightGBM's Brier to 0.15, though even the calibrated probabilities sit above the
-realized rate because 2022 was far more turbulent than the holdout. Class weighting improves
-recall, but a probability that drives a decision should be calibrated first, on unseen data, and
-calibration itself inherits regime shift.
+## 12. Calibration
+
+The learned models use class weighting to improve minority-class recall. Their raw outputs are not assumed to be calibrated probabilities.
+
+On the 2023-onward holdout, XGBoost predicts a mean regime probability of approximately 0.37 and LightGBM approximately 0.40, compared with an observed rate near 0.17. Their Brier scores are approximately 0.18 and 0.19. Isotonic calibration fitted on a separate purged 2022 slice improves LightGBM's Brier score to approximately 0.15, but the calibrated output still reflects market-regime shift between the calibration and evaluation periods.
 
 ![Reliability diagram on the 2023-onward holdout](../reports/figures/calibration.png)
 
-## How leakage is prevented
+The project therefore emphasizes ranking metrics and fixed alert budgets. Any probability-based use would require new prospective calibration on unseen data.
 
-Financial time-series models fail silently when future information leaks into training. Four
-safeguards address this.
+## 13. Limitations
 
-- **Target threshold uses only the past, and is stored, not re-derived.** The label compares
-  future volatility to an expanding 80th-percentile threshold computed with `shift(1)`, so the
-  threshold at time `t` never sees volatility at `t` or later. The threshold is computed on the
-  full download and persisted in the dataset as `vol_threshold`
-  (`scripts/verify_vol_threshold.py`), so the labels, the matched naive baseline, and HAR all
-  use the exact same values (`notebooks/00_data_collection.ipynb`, `src/targets.py`).
-- **Feature and label windows do not overlap.** The primary target measures volatility over the
-  next 10 days, disjoint from the 10-day feature window, so the target is a forecast rather than
-  a restatement of a feature. The mean per-ticker correlation between them falls from ~0.96 for
-  the next-day target to ~0.47 for the forward one, and the pooled correlation from ~0.97 to
-  ~0.61.
-- **Walk-forward validation with a horizon-exact purge.** Training is an expanding window. Each
-  63-trading-day test window starts after its training window with no overlap or shuffling, and
-  the purge drops any training row whose forward-label window would reach into the test period
-  (López de Prado, 2018), enforced in trading days and matched to each target's horizon, so it
-  is holiday-proof. A separate embargo step is unnecessary because the expanding walk-forward
-  never trains on data that follows a test window. The purge lives in the split machinery
-  (`src/split.py`), so the evaluation driver and the modeling notebook share one implementation,
-  and `tests/test_split.py` asserts the invariants. Notebook 03 applies the same label-end rule
-  inline for its holdout and calibration splits.
-- **Scaling fits on training data only.** The logistic regression scaler is fit on the train
-  fold and applied to the test fold (`src/modeling.py`).
+- **Modest effect size.** The primary AP lift is 0.0335 over the matched naive baseline. Statistical significance does not make the forecasting advantage large.
+- **Limited cross-sectional breadth.** The date-block bootstrap accounts for co-movement in the interval estimate, but the universe contains only 14 equities across six sectors, including correlated airline names.
+- **Short final next-day fold.** The negative-control target includes a final nine-trading-day test window that receives the same weight as a full fold in fold-mean summaries. Incomplete forward-target labels are excluded.
+- **No trading-cost model.** Transaction costs, slippage, borrow, execution, portfolio construction, and risk-adjusted returns are not evaluated.
+- **Horizon-specific result.** The edge is strongest at 5 and 10 trading days and does not remain significant at 21 days.
+- **U.S. large-cap scope.** The results may not transfer to smaller equities, international markets, other asset classes, or substantially different future regimes.
+- **Calibration drift.** Probability calibration is sensitive to the market period used to fit the calibrator.
+- **Research artifact.** The saved model supports reproduction and inspection. It is not a live trading or automated-decision system.
 
-## Limitations
+## 14. Reproducibility
 
-- **The lift is modest.** About 0.03 PR-AUC over the matched naive baseline for the best model,
-  statistically significant (see Significance testing) but small. This is a hard forecasting
-  problem.
-- **Cross-sectional dependence is now in the interval, breadth is still limited.** The primary
-  significance uses a date-block bootstrap that resamples whole trading dates, so the 14 co-moving
-  tickers count as one cross-section rather than 14 independent draws (see Significance testing).
-  The 14 names span six sectors with correlated airlines, so effective breadth is well below 14
-  and a wider universe would sharpen the test.
-- **The final fold is short.** The last test window covers the 9 trading days remaining at the
-  end of the sample, kept so the newest data is still evaluated. For the next-day target it
-  carries the same weight as a full fold in the fold-mean. The last day of the final full window
-  similarly drops out of the forward target because its label window extends past the data.
-- **No trading cost model.** This is a forecasting study, not a backtest of a tradable system net
-  of transaction costs, slippage, or borrow.
-- **The edge is horizon-specific.** The headline uses the 80th percentile over a 10-day window.
-  The sensitivity grid holds for 5 and 10-day horizons at moderate thresholds and fades toward the
-  21-day horizon, so the finding is specific to short horizons rather than general.
-- **US large caps only.** Findings may not transfer to other asset classes or market caps.
+```bash
+make install
+make test
+make results
+make sensitivity_grid
+make model
+```
+
+`make results` runs evaluation, significance testing, operating-point analysis, and metrics-derived figure generation. SHAP and calibration figures are generated by `notebooks/03_explainability.ipynb`.
+
+Machine-readable sources for the headline results:
+
+- `reports/metrics/walkforward_summary.csv`
+- `reports/metrics/significance.csv`
+- `reports/metrics/significance_crosssectional.csv`
+- `reports/metrics/sensitivity_grid.csv`
+- `reports/metrics/operating_points.csv`
+- `reports/metrics/oof_predictions.csv`
+
+Related documentation:
+
+- [README](../README.md)
+- [Model card](../reports/model_card.md)
+- [Dataset card](../reports/dataset_card.md)

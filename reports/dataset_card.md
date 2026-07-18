@@ -1,70 +1,180 @@
 # Dataset Card
 
-## Overview
+## Dataset overview
 
-- Dataset name: Merged equity features with volatility targets
-- Version: 1.1 (adds the persisted `vol_threshold` column)
-- Purpose: forecast whether the next 10 trading days are a high-volatility regime
-  (`FwdVolRegime`), and study why volatility is more persistent and forecastable than next-day
-  return direction. A next-day target (`NextVolSpike`) is retained as a
-  reference case.
+- **Name:** Merged equity features with volatility targets
+- **Version:** 1.1
+- **Domain:** Daily U.S. equity market data
+- **Primary file:** `data/processed/merged_features_clean.csv`
+- **Primary target:** `FwdVolRegime`, derived at runtime
+- **Purpose:** Forecast whether the next 10 trading days form a high-volatility regime and demonstrate how overlapping target windows can overstate next-day forecasting skill
+- **Sensitive data:** None
 
 ## Provenance
 
-- Sources: daily OHLCV from Yahoo Finance (via `yfinance`), VIX index as a market-wide
-  volatility signal.
-- Collection period: raw download 2015-01-02 to 2026-01-22 (warm-up rows included),
-  model-ready window 2015-07-20 to 2026-01-21 after trimming incomplete lookbacks.
-- Tickers: AAPL, MSFT, AMZN, GOOGL, NVDA, TSLA (technology), JPM (finance), WMT (retail),
-  DAL, UAL (airlines), LMT, RTX, NOC (defense), XOM (energy).
-- Rights: public market data used for research and educational purposes.
+Daily OHLCV data were collected through `yfinance`. VIX is included as a market-wide implied-volatility signal.
 
-## Structure
+### Time coverage
 
-- Two files. `data/raw/merged_features_full.csv` (38,920 rows) keeps warm-up rows with
-  incomplete indicators for EDA. `data/processed/merged_features_clean.csv` (37,002 rows) is
-  the model-ready set after dropping rows with incomplete lookback windows. 1,918 rows are
-  dropped.
-- Features: `Return`, `RollingVol`, `RSI`, `Price_to_SMA20`, `Price_to_SMA50`,
-  `SMA20_to_SMA50`, `Volume_Z`, `VIX`, `Lagged_Return`. All are known at time `t`.
-- Targets in the CSV: `NextReturn`, `NextDirection`, `NextVolSpike`, all describing `t+1`.
-  `NextReturn` and `NextDirection` are the direction baseline (the negative control that
-  motivates predicting volatility instead of direction) and are not modeled.
-- Stored threshold: `vol_threshold`, the per-ticker expanding 80th percentile of past
-  `RollingVol` (`shift(1)`, minimum 126 observations) that defines both volatility labels.
-  It is computed on the full download (warm-up rows included), persisted by notebook 00, and
-  written into both files by `scripts/verify_vol_threshold.py` (which asserts it reproduces
-  the stored labels exactly), so downstream code never re-derives it from the trimmed clean file.
-- Derived target: `FwdVolRegime`, the primary modeling target, is computed at runtime in
-  `src/targets.py` from the stored threshold (the target itself is not stored in the CSV)
-  together with the matched naive baseline signal.
-- Missingness: the clean file has none.
+- **Raw download:** 2015-01-02 through 2026-01-22
+- **Model-ready period:** 2015-07-20 through 2026-01-21
 
-## Labeling
+The raw dataset retains warm-up rows required for rolling indicators. The processed dataset begins after incomplete lookback windows are removed.
 
-- `NextVolSpike` (demonstration only): 1 if tomorrow's 10-day rolling volatility
-  exceeds an expanding 80th-percentile threshold of past volatility (`shift(1)` so the present
-  is excluded), otherwise 0. Positive rate 25.2%.
-- `FwdVolRegime` (primary): 1 if volatility over the next 10 trading days (disjoint from the
-  10-day feature window) exceeds the same expanding threshold. Positive rate ~25.4%. Because
-  feature and label windows do not overlap, this is a genuine forecast rather than a
-  near-restatement of a feature.
-- `NextDirection`: 1 if tomorrow's return is positive. The positive rate of 52.8% is a
-  persistent upward drift with no exploitable conditional signal in this data, which
-  motivates using volatility rather than direction.
+### Equity universe
 
-## Risk and sensitivity
+| Sector | Tickers |
+|---|---|
+| Technology | AAPL, MSFT, AMZN, GOOGL, NVDA, TSLA |
+| Finance | JPM |
+| Retail | WMT |
+| Airlines | DAL, UAL |
+| Defense | LMT, RTX, NOC |
+| Energy | XOM |
 
-- No personal or sensitive data, market prices only.
-- Representation gaps: US large caps across six sectors. Airline tickers are highly
-  correlated, reducing effective independence.
-- Foreseeable misuse: treating these forecasts as a tradable signal without a cost and
-  execution model.
+The universe contains 14 U.S. large-cap equities across six sectors. It is not intended to represent the full equity market.
 
-## Recommended use
+## Files and row counts
 
-- Suitable: volatility-clustering studies, leakage-aware walk-forward benchmarking, teaching
-  time-series evaluation.
-- Unsuitable: live trading or investment decisions.
-- Maintenance: append new daily data and rerun `notebooks/00_data_collection.ipynb` to
-  refresh features and targets. The notebook persists `vol_threshold` alongside them.
+| File | Rows | Purpose |
+|---|---:|---|
+| `data/raw/merged_features_full.csv` | 38,920 | Full dataset including indicator warm-up rows and incomplete lookbacks |
+| `data/processed/merged_features_clean.csv` | 37,002 | Model-ready dataset after incomplete lookback rows are removed |
+
+A total of 1,918 rows are removed between the raw and processed files. The processed model feature columns contain no missing values.
+
+## Features
+
+The model uses nine features, all available at time `t`:
+
+| Feature | Description |
+|---|---|
+| `Return` | Current daily return |
+| `RollingVol` | Current 10-day rolling volatility |
+| `RSI` | Relative Strength Index |
+| `Price_to_SMA20` | Price divided by the 20-day simple moving average |
+| `Price_to_SMA50` | Price divided by the 50-day simple moving average |
+| `SMA20_to_SMA50` | 20-day moving average divided by the 50-day moving average |
+| `Volume_Z` | Standardized trading volume |
+| `VIX` | Market-wide implied-volatility index |
+| `Lagged_Return` | Previous daily return |
+
+Ratio and standardized features improve comparability across equities with different price and volume scales.
+
+## Threshold and labels
+
+### Persisted regime threshold
+
+`vol_threshold` is the per-ticker expanding 80th percentile of historical `RollingVol`.
+
+It is:
+
+- computed with `shift(1)`, excluding the present and future;
+- initialized after a minimum of 126 historical observations;
+- calculated on the full dataset including warm-up rows;
+- persisted in both CSV files;
+- verified by `scripts/verify_vol_threshold.py`;
+- reused by the targets, matched naive baseline, and HAR benchmark.
+
+Persisting the threshold prevents downstream code from recalculating it on a trimmed sample and drifting from the stored labels.
+
+### `NextVolSpike`
+
+`NextVolSpike` is positive when tomorrow's 10-day rolling volatility exceeds `vol_threshold`.
+
+- **Role:** negative-control target
+- **Full-sample positive rate:** approximately 25.2%
+- **Important caveat:** tomorrow's rolling-volatility window overlaps today's feature window by nine of ten days
+
+The target is retained to show how overlapping windows can make persistence appear to be strong forward prediction.
+
+### `FwdVolRegime`
+
+`FwdVolRegime` is derived at runtime in `src/targets.py`. It is positive when volatility over the next 10 trading days exceeds `vol_threshold`.
+
+- **Role:** primary modeling target
+- **Full-sample positive rate:** approximately 25.4%
+- **Key property:** the future label window is disjoint from the current 10-day rolling-volatility feature window
+
+The target itself is not stored in the CSV. It is recreated through shared target-construction code from future returns and the persisted historical threshold.
+
+### Direction fields
+
+The CSV also contains `NextReturn` and `NextDirection`. `NextDirection` is positive on 52.8% of observations. These fields support exploratory analysis that motivates forecasting volatility rather than next-day direction; they are not modeled in the final comparison.
+
+## Data preparation
+
+The data-collection notebook:
+
+1. downloads daily price and volume histories;
+2. constructs technical indicators and lagged fields;
+3. computes the past-only volatility threshold;
+4. writes the raw and processed CSV files.
+
+The modeling pipeline then:
+
+1. loads the processed dataset;
+2. derives HAR features;
+3. derives `FwdVolRegime` and label-end dates;
+4. excludes rows without complete features, thresholds, or targets;
+5. applies expanding-window splits with horizon-exact purging.
+
+## Missingness and exclusions
+
+- The raw file retains incomplete indicator warm-up rows.
+- The processed file removes rows with incomplete lookback features.
+- Final observations for each ticker may lack a complete future target and are excluded from target-specific fitting or evaluation.
+- The processed model feature columns contain no missing values.
+
+## Representation gaps and dependencies
+
+- The universe contains only 14 U.S. large-cap equities.
+- Six technology equities make the sample sector-imbalanced.
+- DAL and UAL are strongly correlated, reducing effective cross-sectional breadth.
+- VIX is repeated across equities on the same trading date.
+- Observations are dependent over time because volatility clusters.
+- The date range covers multiple market conditions but does not guarantee performance in future regimes.
+- The data exclude international markets, smaller companies, other asset classes, intraday behavior, transaction costs, and execution conditions.
+
+The primary significance analysis addresses temporal and cross-sectional dependence through date-block resampling, but it does not expand the underlying market coverage.
+
+## Appropriate uses
+
+The dataset is suitable for:
+
+- research on volatility clustering;
+- leakage-aware time-series classification;
+- walk-forward validation demonstrations;
+- comparisons with naive and econometric baselines;
+- educational reproduction of the reported analysis.
+
+## Inappropriate uses
+
+The dataset and labels should not be used as direct support for:
+
+- live trading or investment recommendations;
+- automated portfolio decisions;
+- claims of profitability;
+- evaluation without time-aware splitting;
+- threshold construction that uses present or future data;
+- claims of broad equity-market coverage;
+- decisions that assume the included files are real-time, complete, or free of provider limitations.
+
+## Maintenance
+
+To refresh the dataset:
+
+1. rerun `notebooks/00_data_collection.ipynb`;
+2. run `make verify_vol_threshold`;
+3. confirm that the persisted threshold is updated in both CSV files;
+4. rerun evaluation, significance, sensitivity, and documentation outputs.
+
+Updating the data changes the evaluation period and may change thresholds, class rates, model rankings, significance results, explainability, and calibration.
+
+## Licensing and data use
+
+The repository's MIT license applies to the source code.
+
+The included CSV files are derivatives of market data obtained through their original providers. The MIT license does not grant rights to the underlying market data. Use, redistribution, and downstream publication remain subject to the applicable provider terms.
+
+The files are included for research reproduction and educational use, not as an independently licensed market-data product.

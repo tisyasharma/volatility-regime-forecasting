@@ -1,136 +1,94 @@
 # Forecasting Volatility Regimes in US Equities
 
-A leakage-aware, walk-forward machine learning pipeline that forecasts whether the next 10
-trading days will be a high-volatility regime across 14 US equities. The target is volatility
-rather than direction because the EDA finds no next-day direction signal to exploit beyond
-always predicting an up-day, while volatility is persistent enough to forecast. The project
-tests whether that persistence amounts to measurable skill once leakage and naive baselines are
-ruled out.
+A leakage-aware time-series machine learning pipeline for forecasting whether 14 U.S. equities will enter a high-volatility regime over the next 10 trading days.
 
-![PR-AUC by model on the next-day and forward volatility targets](reports/figures/target_reversal.png)
+The analysis uses 37,002 observations from 2015 to 2026 and compares logistic regression, LightGBM, XGBoost, and a HAR benchmark against matched naive baselines under expanding-window validation with horizon-exact purging.
 
-## Overview
+An initial next-day volatility target produced high scores because its feature and label windows overlapped by nine days. Reframing the task around a forward-disjoint 10-day target removed that shortcut and produced a more defensible estimate of out-of-sample forecasting skill. On this target, logistic regression reached 0.368 average precision versus 0.334 for the matched naive baseline, a +0.034 absolute lift that remained significant after accounting for temporal and cross-equity dependence.
 
-Two targets are evaluated against a **matched naive baseline** that predicts a regime whenever
-today's volatility already exceeds the per-ticker threshold defining the label. The next-day
-target (`NextVolSpike`) overlaps its feature window by nine of ten days, so it mostly restates
-today's regime and serves as a negative control. The forward target (`FwdVolRegime`) measures
-volatility over the next 10 trading days, disjoint from the features, and is the genuine forecast
-the saved model uses.
+> This is a research and educational forecasting study, not a production trading system or investment strategy.
 
-The result splits cleanly. On the next-day target a one-line naive rule reaches PR-AUC near 0.90
-and beats every learned model, which is exactly why that target overstates skill. On the forward
-target every score drops toward the base rate, and only the logistic regression adds a lift that
-survives dependence-aware significance testing.
+![Model comparison on the overlapping next-day target and the forward-disjoint volatility target](reports/figures/target_reversal.png)
+
+## Separating persistence from predictive skill
+
+The analysis compares two labels built from the same historical per-ticker volatility threshold.
+
+- **`NextVolSpike`** is a negative control. It asks whether tomorrow's 10-day rolling volatility exceeds the threshold, but its label window overlaps the current feature window by nine of ten days. The matched naive rule and HAR both reach average precision near 0.90 and outperform every learned model.
+- **`FwdVolRegime`** is the primary target. It asks whether volatility over the next 10 trading days exceeds the threshold. Its label window is disjoint from the current feature window, so performance reflects forward ranking skill rather than a near-restatement of today's regime.
+
+The matched naive baseline flags a regime whenever current volatility already exceeds the same stored threshold used by the labels. It captures the persistence a learned model must beat.
 
 ## Results
 
-Forward target, mean across 28 walk-forward folds, with a no-skill PR-AUC floor near 0.27.
+Forward target, mean across 28 expanding-window folds:
 
-| Model | Precision | Recall | F1 | PR-AUC |
+| Model | Precision | Recall | F1 | Average precision |
 |---|---:|---:|---:|---:|
-| Majority | 0.00 | 0.00 | 0.00 | n/a |
-| Persistence (pooled fixed threshold) | 0.33 | 0.33 | 0.32 | n/a |
-| HAR | 0.30 | 0.26 | 0.26 | 0.32 |
-| Matched naive | 0.32 | 0.32 | 0.32 | 0.33 |
-| XGBoost | 0.33 | 0.44 | 0.36 | 0.35 |
-| LightGBM | 0.33 | 0.50 | 0.38 | 0.36 |
-| **Logistic Regression** | 0.32 | 0.55 | **0.38** | **0.37** |
+| Majority | 0.000 | 0.000 | 0.000 | n/a |
+| Persistence | 0.332 | 0.327 | 0.324 | n/a |
+| HAR | 0.296 | 0.256 | 0.264 | 0.323 |
+| Matched naive | 0.316 | 0.321 | 0.316 | 0.334 |
+| XGBoost | 0.328 | 0.440 | 0.362 | 0.350 |
+| LightGBM | 0.330 | 0.502 | 0.381 | 0.360 |
+| **Logistic regression** | **0.316** | **0.545** | **0.385** | **0.368** |
 
-The logistic regression adds +0.034 PR-AUC over the matched naive baseline, and the edge survives
-a date-block bootstrap that clusters the 14 co-moving tickers by trading date (95% CI [0.009,
-0.047], p=0.009, Holm p=0.028 across the three learned models). It is the only model that clears
-that cross-sectional-aware bar. LightGBM is marginal, XGBoost is not significant, and HAR trails
-the naive rule. The full comparison, the next-day results, the threshold and horizon grid,
-operating points, explainability, and calibration are in [docs/METHODOLOGY.md](docs/METHODOLOGY.md).
+The exact logistic-regression improvement is **0.0335 average-precision points**. The primary significance analysis resamples complete trading dates in 21-day blocks, keeping the 14 co-moving equities together rather than treating them as independent observations. The 95% interval is **[0.0093, 0.0474]**, with **p=0.0093** and **Holm-adjusted p=0.028** across logistic regression, LightGBM, and XGBoost.
+
+The result is small but defensible. Logistic regression is the only learned model whose lift survives the cross-sectional-aware test and multiple-comparison correction. LightGBM is marginal before correction, XGBoost is not significant, and HAR trails the matched naive rule.
 
 ## Leakage controls
 
-Financial time-series models fail when future information leaks into training. Three
-controls carry most of the weight, with the full account in
-[docs/METHODOLOGY.md](docs/METHODOLOGY.md).
+Four safeguards prevent the main sources of future information leakage:
 
-- **The label threshold uses only the past.** An expanding 80th-percentile threshold computed
-  with `shift(1)` is persisted once and reused by the labels, the naive baseline, and HAR, so
-  nothing re-derives it (`scripts/verify_vol_threshold.py`).
-- **Feature and label windows do not overlap.** The forward target measures the next 10 days,
-  disjoint from the 10-day feature window, which drops the mean feature-to-label correlation from
-  ~0.96 for the next-day target to ~0.47 for the forward one.
-- **Walk-forward with a horizon-exact purge.** Expanding-window training and non-overlapping
-  63-day test windows, with a trading-day purge that drops any training row whose label window
-  reaches into the test period (López de Prado, 2018), enforced in `src/split.py` and asserted in
-  `tests/test_split.py`.
+1. **Past-only thresholds.** The per-ticker 80th-percentile threshold is computed with `shift(1)`, excluding the present and future.
+2. **Disjoint windows.** The primary label measures volatility over `t+1` through `t+10`, separate from the current 10-day rolling-volatility feature window. This drops the correlation between current volatility and the labeled quantity from about 0.96 for the next-day target to about 0.47 for the forward one.
+3. **Horizon-exact purging.** Any training row whose label window reaches the test period is removed before fitting.
+4. **Train-only scaling.** The logistic-regression scaler is fit separately inside each training fold.
 
-## Quickstart
+[`tests/test_split.py`](tests/test_split.py) asserts temporal ordering, zero train-test overlap, purge boundaries, incomplete-label handling, minimum training size, and final-fold behavior.
+
+## Robustness and interpretation
+
+A sensitivity grid recomputes the target across 70th, 80th, and 90th percentile thresholds and 5-, 10-, and 21-day horizons. The lift is significant at every tested threshold for the 5-day horizon and at the 70th and 80th percentiles for the 10-day horizon. No tested 21-day configuration is significant.
+
+At a pooled 20% alert budget, logistic regression reaches 0.6226 precision and 0.4651 recall, compared with 0.5285 precision and 0.3948 recall for the matched naive baseline. These are retrospective tradeoffs, not a production alert policy.
+
+The saved logistic-regression model is interpreted through standardized coefficients, while a separate XGBoost model is explained with SHAP on a 2023-onward holdout. VIX and current rolling volatility emerge as stable positive signals across both views. Raw class-weighted scores are not treated as calibrated probabilities.
+
+Full significance, sensitivity, operating-point, explainability, and calibration results are in [`docs/METHODOLOGY.md`](docs/METHODOLOGY.md).
+
+## Reproducing the analysis
 
 ```bash
-pip install -r requirements.txt
+git clone https://github.com/tisyasharma/volatility-regime-forecasting.git
+cd volatility-regime-forecasting
 
-python scripts/run_evaluation.py     # walk-forward metrics, both targets -> reports/metrics/
-python scripts/significance.py        # dependence-aware significance -> reports/metrics/
-python scripts/operating_points.py    # alert-budget operating points -> reports/metrics/
-python scripts/make_figures.py        # metrics-derived figures -> reports/figures/
-python scripts/sensitivity_grid.py    # threshold and horizon robustness grid -> reports/
-python scripts/save_model.py          # train and save the final model -> models/artifacts/
-pytest tests/                         # split and purge invariants
+make install
+make test
+make results
+make sensitivity_grid
+make model
 ```
 
-The notebooks reproduce the same pipeline interactively, from raw download through EDA, modeling,
-and explainability. The SHAP, coefficient, and calibration figures are rendered by `03_explainability.ipynb`.
+`make results` runs evaluation, significance testing, operating-point analysis, and metrics-derived figure generation. The shared `src/` modules contain the reusable analysis logic; the notebooks provide an interactive path through data collection, EDA, modeling, explainability, and calibration.
 
-## Repository structure
+## Data and scope
 
-```
-volatility-regime-forecasting/
-  config.yaml                 Central configuration (data, split, model params)
-  Makefile                    Entry points for the pipeline stages
-  data/
-    raw/                      Full dataset including warm-up rows
-    processed/                Model-ready clean dataset
-  src/
-    pipeline.py               Data loading and feature/label preparation
-    split.py                  Expanding-window walk-forward splits with purge
-    targets.py                Forward-disjoint target and the matched naive baseline
-    modeling.py               Baselines, models, HAR, and evaluation
-  scripts/                    Evaluation, significance, operating points, figures, model, sensitivity grid
-  tests/                      Split and purge invariants
-  notebooks/                  Data collection, EDA, modeling, explainability
-  reports/
-    metrics/                  Per-fold and aggregate metrics
-    figures/                  Rendered figures
-    model_card.md             Model summary, evaluation, deployment
-    dataset_card.md           Provenance, structure, labeling, risks
-  docs/
-    METHODOLOGY.md            Full results, significance, and leakage detail
-  models/artifacts/           Saved model
-```
+The processed dataset contains 37,002 rows for 14 U.S. large-cap equities across six sectors, covering 2015-07-20 through 2026-01-21. Daily OHLCV data and VIX were collected through `yfinance`, and all nine model features are available at time `t`.
 
-## Data
-
-14 tickers across technology, finance, retail, airlines, defense, and energy, from 2015-07-20 to
-2026-01-21 (37,002 model-ready rows). Prices come from Yahoo Finance and the VIX provides a
-market-wide volatility signal. Features are technical indicators expressed as scale-free ratios
-and z-scores so they compare across tickers. The [dataset card](reports/dataset_card.md) has the
-full column list and the [model card](reports/model_card.md) has the modeling detail. The code is MIT-licensed, and the CSVs are derived from Yahoo Finance market data and included for research reproduction only.
+See the [`dataset card`](reports/dataset_card.md) for exact tickers, feature definitions, label construction, representation gaps, and data-use constraints. The MIT license applies to the source code, not to the underlying market data or provider terms.
 
 ## Limitations
 
-- **The lift is modest.** About 0.03 PR-AUC over the matched naive baseline for the best model,
-  statistically significant but small. This is a hard forecasting problem.
-- **Cross-sectional dependence is in the primary interval, breadth is still limited.** The
-  headline significance clusters the 14 co-moving tickers by trading date, so they count as one
-  cross-section rather than 14 draws. The universe is still 14 names, so a wider one would sharpen
-  the test.
-- **Scope.** US large caps only, with no trading-cost model. The headline regime is the 80th
-  percentile over 10 days, and the sensitivity grid shows the edge holds for short horizons at
-  moderate thresholds and fades by the 21-day horizon.
+- **Modest effect size.** The best model improves average precision by 0.0335 over the matched naive baseline.
+- **Limited breadth.** The universe contains 14 equities across six sectors, including correlated names.
+- **Horizon dependence.** The edge is strongest at 5 and 10 trading days and does not remain significant at 21 days.
+- **No trading backtest.** Transaction costs, execution, portfolio construction, and risk-adjusted returns are outside the project scope.
+- **Calibration drift.** Raw class-weighted scores require new out-of-sample calibration before probability-based use.
 
-The [methodology](docs/METHODOLOGY.md) has the full limitations.
+## Documentation
 
-## Learn more
-
-- **[docs/METHODOLOGY.md](docs/METHODOLOGY.md)** covers the full results, significance, operating
-  points, explainability, calibration, and leakage detail.
-- **[Model card](reports/model_card.md)** covers the model summary, intended uses, evaluation, and
-  deployment.
-- **[Dataset card](reports/dataset_card.md)** covers provenance, structure, labeling, and risks.
+- [`docs/METHODOLOGY.md`](docs/METHODOLOGY.md): complete analytical and statistical methodology
+- [`reports/model_card.md`](reports/model_card.md): model behavior, intended use, evaluation, and risks
+- [`reports/dataset_card.md`](reports/dataset_card.md): provenance, structure, labels, and data-use guidance
