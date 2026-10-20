@@ -1,10 +1,11 @@
 # Entry points for the project. src/ holds the importable library, these targets
 # run the scripts/ that orchestrate it. Run `make help` to list targets.
 
-.PHONY: help install results evaluate significance operating_points figures model sensitivity_grid verify_vol_threshold test clean
+.PHONY: help install check results evaluate significance operating_points figures model sensitivity_grid verify_vol_threshold test clean
 
 help:
 	@echo "make install           install dependencies"
+	@echo "make check             lint, format, type and test gate (same as CI)"
 	@echo "make test              run the test suite"
 	@echo "make results           script pipeline: evaluation, significance, operating points, metrics figures"
 	@echo "make evaluate          walk-forward evaluation -> reports/metrics/"
@@ -17,7 +18,7 @@ help:
 	@echo "make clean             remove regenerable artifacts (oof predictions, saved model)"
 
 install:
-	pip install -r requirements.txt
+	uv sync --locked --group notebooks
 
 # Sub-makes keep the stages strictly sequential even under `make -j`, since
 # significance, operating_points, and figures all read the metrics that evaluate writes.
@@ -28,29 +29,32 @@ results:
 	$(MAKE) figures
 
 evaluate:
-	python scripts/run_evaluation.py
+	uv run python scripts/run_evaluation.py
 
 significance:
-	python scripts/significance.py
+	uv run python scripts/significance.py
 
 operating_points:
-	python scripts/operating_points.py
+	uv run python scripts/operating_points.py
 
 figures:
-	python scripts/make_figures.py
+	uv run python scripts/make_figures.py
 
 model:
-	python scripts/save_model.py
+	uv run python scripts/save_model.py
 
 sensitivity_grid:
-	python scripts/sensitivity_grid.py
+	uv run python scripts/sensitivity_grid.py
 
 # Rewrites both dataset CSVs in place after verifying the threshold reproduces the labels.
 verify_vol_threshold:
-	python scripts/verify_vol_threshold.py
+	uv run python scripts/verify_vol_threshold.py
+
+check:
+	scripts/check.sh
 
 test:
-	pytest tests/
+	uv run pytest
 
 clean:
 	rm -f reports/metrics/oof_predictions.csv

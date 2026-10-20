@@ -23,3 +23,6 @@ Thumbs.db
 
 # Large regenerable intermediate
 reports/metrics/oof_predictions.csv
+
+# Test reports
+build/

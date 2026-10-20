@@ -60,6 +60,8 @@ Full significance, sensitivity, operating-point, explainability, and calibration
 
 ## Reproducing the analysis
 
+Requires [uv](https://docs.astral.sh/uv/), which installs Python 3.12 and the locked dependencies.
+
 ```bash
 git clone https://github.com/tisyasharma/volatility-regime-forecasting.git
 cd volatility-regime-forecasting
