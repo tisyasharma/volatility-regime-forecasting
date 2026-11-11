@@ -1,0 +1,6 @@
+# The datasets, committed metrics, reference out-of-fold run and saved model are pinned by hash
+# and byte-compared, so checkouts must never convert their line endings.
+data/**/*.csv -text
+reports/metrics/*.csv -text
+models/artifacts/*.joblib binary
+tests/golden/*.gz binary

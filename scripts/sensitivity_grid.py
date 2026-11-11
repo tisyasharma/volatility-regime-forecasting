@@ -1,11 +1,13 @@
 """
 Threshold and horizon sensitivity grid for the forward volatility-regime forecast.
 
-Sweeps the regime quantile and the forward horizon, recomputing the leakage-safe threshold per
-cell so the base rate is governed by the quantile and the cells stay comparable across horizons.
-Each cell reports the champion logistic regression edge over the matched naive baseline in mean
-walk-forward PR-AUC, with a fold-block bootstrap interval. The (0.80, 10) cell reproduces the
-headline result and anchors the grid. Writes reports/metrics/sensitivity_grid.csv and
+Sweeps the regime quantile and the forward horizon, recomputing the leakage-safe threshold per cell
+so the base rate is governed by the quantile. The threshold, the naive baseline and the scored folds
+change with the horizon, so the cells are not like-for-like. Each cell reports the logistic
+regression edge over the matched naive baseline in mean walk-forward PR-AUC, with a fold-block
+bootstrap interval. The (0.80, 10) cell is the headline target, but it is labelled from the raw
+file, which ends one trading day after the clean file, so it also scores 2026-01-07 and its edge
+differs from the headline in the fourth decimal. Writes reports/metrics/sensitivity_grid.csv and
 reports/figures/sensitivity_grid.png.
 """
 

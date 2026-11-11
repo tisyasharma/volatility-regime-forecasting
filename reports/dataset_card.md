@@ -19,11 +19,11 @@ Daily OHLCV data were collected through `yfinance`. VIX is included as a market-
 - **Raw download:** 2015-01-02 through 2026-01-22
 - **Model-ready period:** 2015-07-20 through 2026-01-21
 
-The raw dataset retains warm-up rows required for rolling indicators. The processed dataset begins after incomplete lookback windows are removed.
+The raw dataset keeps the warm-up rows that the rolling indicators and the expanding label threshold need. The processed dataset drops every row with a missing value: each ticker's first 136 rows, where the threshold does not yet have its 126 prior observations, and the final trading day, whose next-day fields cannot be computed.
 
 ### Equity universe
 
-| Sector | Tickers |
+| Industry group | Tickers |
 |---|---|
 | Technology | AAPL, MSFT, AMZN, GOOGL, NVDA, TSLA |
 | Finance | JPM |
@@ -32,20 +32,20 @@ The raw dataset retains warm-up rows required for rolling indicators. The proces
 | Defense | LMT, RTX, NOC |
 | Energy | XOM |
 
-The universe contains 14 U.S. large-cap equities across six sectors. It is not intended to represent the full equity market.
+The universe contains 14 U.S. large-cap equities in six industry groups. The groups are this project's own, not an official sector classification, and the universe is not intended to represent the full equity market.
 
 ## Files and row counts
 
 | File | Rows | Purpose |
 |---|---:|---|
-| `data/raw/merged_features_full.csv` | 38,920 | Full dataset including indicator warm-up rows and incomplete lookbacks |
-| `data/processed/merged_features_clean.csv` | 37,002 | Model-ready dataset after incomplete lookback rows are removed |
+| `data/raw/merged_features_full.csv` | 38,920 | Full dataset, including each ticker's warm-up rows and the final trading day |
+| `data/processed/merged_features_clean.csv` | 37,002 | Model-ready dataset, with every row that has a missing value removed |
 
-A total of 1,918 rows are removed between the raw and processed files. The processed model feature columns contain no missing values.
+A total of 1,918 rows are removed between the raw and processed files: 1,904 warm-up rows (136 per ticker) and the 14 rows of 2026-01-22. 1,218 of the warm-up rows already have every feature, but no label threshold yet. The processed model feature columns contain no missing values.
 
 ## Features
 
-The model uses nine features, all available at time `t`:
+The model uses nine features, all available by the end of trading day `t`:
 
 | Feature | Description |
 |---|---|
@@ -56,7 +56,7 @@ The model uses nine features, all available at time `t`:
 | `Price_to_SMA50` | Price divided by the 50-day simple moving average |
 | `SMA20_to_SMA50` | 20-day moving average divided by the 50-day moving average |
 | `Volume_Z` | Standardized trading volume |
-| `VIX` | Market-wide implied-volatility index |
+| `VIX` | Market-wide implied-volatility index, its daily close, which Cboe disseminates until 4:15 p.m. ET (Cboe Volatility Index Methodology, section 4) |
 | `Lagged_Return` | Previous daily return |
 
 Ratio and standardized features improve comparability across equities with different price and volume scales.
@@ -100,7 +100,7 @@ The target itself is not stored in the CSV. It is recreated through shared targe
 
 ### Direction fields
 
-The CSV also contains `NextReturn` and `NextDirection`. `NextDirection` is positive on 52.8% of observations. These fields support exploratory analysis that motivates forecasting volatility rather than next-day direction; they are not modeled in the final comparison.
+The CSV also contains `NextReturn` and `NextDirection`. `NextDirection` is positive on 52.8% of observations. These fields support exploratory analysis that motivates forecasting volatility rather than next-day direction. They are not modeled in the final comparison.
 
 ## Data preparation
 
@@ -121,22 +121,22 @@ The modeling pipeline then:
 
 ## Missingness and exclusions
 
-- The raw file retains incomplete indicator warm-up rows.
-- The processed file removes rows with incomplete lookback features.
+- The raw file retains the warm-up rows, where indicators or the label threshold are still undefined.
+- The processed file removes those rows and the final trading day, whose next-day fields are missing.
 - Final observations for each ticker may lack a complete future target and are excluded from target-specific fitting or evaluation.
 - The processed model feature columns contain no missing values.
 
 ## Representation gaps and dependencies
 
 - The universe contains only 14 U.S. large-cap equities.
-- Six technology equities make the sample sector-imbalanced.
+- Six equities in the technology group make the sample imbalanced across groups.
 - DAL and UAL are strongly correlated, reducing effective cross-sectional breadth.
 - VIX is repeated across equities on the same trading date.
 - Observations are dependent over time because volatility clusters.
 - The date range covers multiple market conditions but does not guarantee performance in future regimes.
 - The data exclude international markets, smaller companies, other asset classes, intraday behavior, transaction costs, and execution conditions.
 
-The primary significance analysis addresses temporal and cross-sectional dependence through date-block resampling, but it does not expand the underlying market coverage.
+The significance analyses account for temporal and cross-sectional dependence by resampling blocks of folds or of whole trading dates, but they do not expand the underlying market coverage.
 
 ## Appropriate uses
 
@@ -164,10 +164,22 @@ The dataset and labels should not be used as direct support for:
 
 To refresh the dataset:
 
-1. rerun `notebooks/00_data_collection.ipynb`;
-2. run `make verify_vol_threshold`;
-3. confirm that the persisted threshold is updated in both CSV files;
-4. rerun evaluation, significance, sensitivity, and documentation outputs.
+1. rerun `notebooks/00_data_collection.ipynb`, which overwrites both CSVs in `data/` with a new download, and review `git diff --stat data/` against the committed files;
+2. run `make verify_vol_threshold`, which removes `build/vol_threshold/`, re-derives the threshold from the raw file and checks that it reproduces the labels in both new files and that the clean file holds the right raw rows. Only then does it write both files with the re-derived threshold to `build/vol_threshold/`, reporting whether each is identical to the file now in `data/`;
+3. if a file differs, review the difference and copy the verified file into `data/`;
+4. regenerate `data/SHA256SUMS`, which step 1 made stale, with `shasum -a 256 data/processed/merged_features_clean.csv data/raw/merged_features_full.csv > data/SHA256SUMS`;
+5. run `make results`, `make sensitivity_grid` and `make model`, then refresh the golden references the tests compare against:
+
+   ```bash
+   gzip -9 -n -c reports/metrics/oof_predictions.csv > tests/golden/reference_oof.csv.gz
+   shasum -a 256 reports/metrics/walkforward_per_fold.csv reports/metrics/walkforward_summary.csv \
+       reports/metrics/significance.csv reports/metrics/significance_crosssectional.csv \
+       reports/metrics/operating_points.csv reports/metrics/sensitivity_grid.csv \
+       tests/golden/reference_oof.csv.gz models/artifacts/final_model_fwdvolregime.joblib \
+       > tests/golden/SHA256SUMS
+   ```
+
+   `-n` leaves the name and timestamp out of the gzip header, so with the same gzip build the same predictions give the same hash.
 
 Updating the data changes the evaluation period and may change thresholds, class rates, model rankings, significance results, explainability, and calibration.
 

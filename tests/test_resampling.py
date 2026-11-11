@@ -1,17 +1,21 @@
 """
-Tests for the dependence-aware resampling helpers and the out-of-fold schema they consume.
+Tests for the dependence-aware resampling helpers.
 """
 
-from pathlib import Path
-
 import numpy as np
-import pandas as pd
-import pytest
+from hypothesis import given, settings
+from hypothesis import strategies as st
 from sklearn.metrics import average_precision_score
 
 from src.resampling import _average_precision, paired_edge_stats, date_block_bootstrap_edge
 
-OOF = Path(__file__).resolve().parents[1] / "reports" / "metrics" / "oof_predictions.csv"
+# Labels with both classes, and scores drawn from a few values so most draws contain ties.
+labelled_scores = st.integers(min_value=2, max_value=60).flatmap(
+    lambda n: st.tuples(
+        st.lists(st.integers(0, 1), min_size=n, max_size=n).filter(lambda y: 0 < sum(y) < n),
+        st.lists(st.sampled_from([0.1, 0.25, 0.5, 0.75, 0.9]), min_size=n, max_size=n),
+    )
+)
 
 
 def test_average_precision_matches_sklearn_on_continuous_scores():
@@ -24,6 +28,56 @@ def test_average_precision_matches_sklearn_on_continuous_scores():
             continue
         s = rng.random(n)
         assert abs(_average_precision(y, s) - average_precision_score(y, s)) < 1e-9
+
+
+def test_average_precision_groups_tied_scores_like_sklearn():
+    """Tied scores share one threshold, for mixed-label ties and for rows repeated by resampling."""
+    y = np.array([1, 0, 1, 1, 0, 0, 1, 0])
+    s = np.array([0.9, 0.7, 0.7, 0.7, 0.4, 0.4, 0.4, 0.1])
+    # Thresholds 0.9, 0.7 and 0.4 give (recall, precision) of (1/4, 1), (3/4, 3/4) and (1, 4/7).
+    assert abs(_average_precision(y, s) - 43 / 56) < 1e-12
+    assert abs(_average_precision(y, s) - average_precision_score(y, s)) < 1e-12
+
+    rng = np.random.default_rng(3)
+    for _ in range(50):
+        n = int(rng.integers(50, 300))
+        y = (rng.random(n) < 0.3).astype(int)
+        s = rng.random(n)
+        # Drawing rows with replacement repeats them, as a date drawn twice does in the bootstrap.
+        rows = rng.integers(0, n, size=n)
+        coarse = np.round(s, 1)
+        for yy, ss in [(y[rows], s[rows]), (y, coarse)]:
+            if yy.min() == yy.max():
+                continue
+            assert abs(_average_precision(yy, ss) - average_precision_score(yy, ss)) < 1e-12
+
+
+# These check correctness, not speed, and a per-example deadline only makes them flaky on a
+# loaded CI runner, so none of the three properties sets one.
+@settings(deadline=None)
+@given(data=labelled_scores, seed=st.integers(0, 2**32 - 1))
+def test_average_precision_ignores_row_order(data, seed):
+    """Average precision depends only on the scores and labels, not on how the rows are ordered."""
+    y, score = np.array(data[0]), np.array(data[1])
+    order = np.random.default_rng(seed).permutation(len(y))
+    assert abs(_average_precision(y[order], score[order]) - _average_precision(y, score)) < 1e-12
+
+
+@settings(deadline=None)
+@given(data=labelled_scores, copies=st.integers(2, 4))
+def test_average_precision_ignores_duplicating_every_row(data, copies):
+    """Repeating every row the same number of times leaves precision and recall unchanged."""
+    y, score = np.array(data[0]), np.array(data[1])
+    repeated = _average_precision(np.repeat(y, copies), np.repeat(score, copies))
+    assert abs(repeated - _average_precision(y, score)) < 1e-12
+
+
+@settings(deadline=None)
+@given(data=labelled_scores)
+def test_average_precision_matches_sklearn_with_ties(data):
+    """With any pattern of tied scores the result equals sklearn's average_precision_score."""
+    y, score = np.array(data[0]), np.array(data[1])
+    assert abs(_average_precision(y, score) - average_precision_score(y, score)) < 1e-12
 
 
 def test_paired_edge_stats_flags_a_clear_positive_edge():
@@ -54,13 +108,3 @@ def test_date_block_point_estimate_equals_fold_mean_edge():
     ])
     assert abs(r["edge"] - expected) < 1e-9
     assert r["ci_lo"] <= r["edge"] <= r["ci_hi"]
-
-
-def test_oof_carries_date_and_ticker_when_generated():
-    """Once run_evaluation.py has run, every out-of-fold row is labelled with its date and ticker."""
-    if not OOF.exists():
-        pytest.skip("oof_predictions.csv not generated yet")
-    df = pd.read_csv(OOF)
-    assert {"Date", "Ticker"}.issubset(df.columns)
-    assert df["Date"].notna().all()
-    assert df["Ticker"].notna().all()

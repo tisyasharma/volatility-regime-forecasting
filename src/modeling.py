@@ -95,11 +95,11 @@ def add_har_features(df):
 
 def train_har(X_har, target_vol):
     """
-    Fit the HAR volatility forecaster.
+    Fit the HAR volatility forecaster by OLS of the target volatility on the HAR components.
 
-    OLS regresses the target volatility (next-day or forward, depending on the task) on the
-    HAR components. The forecast is later thresholded against the same expanding threshold
-    that defines the classification label, so HAR competes on identical terms.
+    The target is next-day or forward volatility, depending on the task. Returns the
+    coefficients, intercept first, and the target's standard deviation, which
+    threshold_to_prediction uses to scale the forecast's margin over the label threshold.
     """
     X = np.asarray(X_har, dtype=float)
     y = np.asarray(target_vol, dtype=float)

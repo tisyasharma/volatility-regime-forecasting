@@ -1,13 +1,17 @@
 """
 Train the final model on all available data and persist it for reuse.
 
-Which model gets saved is governed by evaluation.final_model in config.yaml. When that key
-is null, the best learned model by walk-forward PR-AUC on the config target is chosen from
-reports/metrics/walkforward_summary.csv, so the artifact always reflects the evaluation
-rather than a hardcoded pick. The model is trained on the full clean dataset and saved with
-the feature list so it can be reloaded and applied to fresh rows via predict_with_model.
+Which model gets saved is set by evaluation.final_model in config.yaml, which pins
+LogisticRegression. When that key is null, the learned model with the highest mean
+walk-forward PR-AUC on the config target is taken from reports/metrics/walkforward_summary.csv.
+The model is trained on every configured clean row with a complete forward label and saved
+with its feature list, so it can be reloaded and applied to fresh rows via predict_with_model.
+The artifact also records what produced it: the training data's path and SHA-256, the
+configured ticker and date filters, the training rows and window, the forward window and the
+library versions.
 """
 
+import importlib.metadata
 import sys
 from pathlib import Path
 
@@ -21,8 +25,13 @@ from src.config import load_config
 from src.pipeline import load_data, prepare_features_and_labels
 from src.modeling import MODEL_BUILDERS
 from src.targets import add_regime_columns
+from scripts.verify_data_manifest import sha256_of
 
 LEARNED_MODELS = ["LogisticRegression", "LightGBM", "XGBoost"]
+# The libraries whose versions can change a fitted model (scipy runs logistic regression's
+# lbfgs solver) plus joblib, which writes the file. All are fixed by uv.lock. Python is not
+# recorded, because the lock fixes only its minor version and the patch differs by machine.
+PROVENANCE_LIBRARIES = ["joblib", "lightgbm", "numpy", "pandas", "scikit-learn", "scipy", "xgboost"]
 
 
 def pick_final_model(cfg):
@@ -79,7 +88,7 @@ def main():
         tickers=data_cfg.get("tickers"),
     )
     df = add_regime_columns(df, forward_window=forward_window)
-    X, y, _ = prepare_features_and_labels(df, data_cfg["features"], data_cfg["target"])
+    X, y, dates = prepare_features_and_labels(df, data_cfg["features"], data_cfg["target"])
 
     model = MODEL_BUILDERS[model_name](X, y, model_cfg)
 
@@ -90,6 +99,20 @@ def main():
         "model": model,
         "features": data_cfg["features"],
         "target": data_cfg["target"],
+        "provenance": {
+            "data_path": data_cfg["input_path"],
+            "data_sha256": sha256_of(REPO_ROOT / data_cfg["input_path"]),
+            "tickers": data_cfg.get("tickers"),
+            "start_date": data_cfg.get("start_date"),
+            "end_date": data_cfg.get("end_date"),
+            "train_rows": len(X),
+            "train_start": dates.min().date().isoformat(),
+            "train_end": dates.max().date().isoformat(),
+            "forward_window": forward_window,
+            "libraries": {
+                name: importlib.metadata.version(name) for name in PROVENANCE_LIBRARIES
+            },
+        },
     }
     # Filename follows the config target so retargeting the project cannot silently
     # leave a stale artifact name behind.

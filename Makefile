@@ -1,7 +1,7 @@
 # Entry points for the project. src/ holds the importable library, these targets
 # run the scripts/ that orchestrate it. Run `make help` to list targets.
 
-.PHONY: help install check results evaluate significance operating_points figures model sensitivity_grid verify_vol_threshold test clean
+.PHONY: help install check results evaluate significance operating_points figures model sensitivity_grid verify_vol_threshold verify_data test clean
 
 help:
 	@echo "make install           install dependencies"
@@ -14,8 +14,9 @@ help:
 	@echo "make figures           render metrics figures -> reports/figures/ (SHAP and calibration figures come from notebook 03)"
 	@echo "make model             train and save the final model -> models/artifacts/"
 	@echo "make sensitivity_grid  threshold and horizon robustness grid -> reports/metrics/, reports/figures/"
-	@echo "make verify_vol_threshold  derive, verify, and persist the label threshold into the dataset CSVs"
-	@echo "make clean             remove regenerable artifacts (oof predictions, saved model)"
+	@echo "make verify_vol_threshold  derive and verify the label threshold -> build/vol_threshold/"
+	@echo "make verify_data       check the datasets against data/SHA256SUMS"
+	@echo "make clean             remove regenerable untracked outputs (oof predictions, threshold check)"
 
 install:
 	uv sync --locked --group notebooks
@@ -46,9 +47,13 @@ model:
 sensitivity_grid:
 	uv run python scripts/sensitivity_grid.py
 
-# Rewrites both dataset CSVs in place after verifying the threshold reproduces the labels.
+# Removes build/vol_threshold/, then writes both datasets with the threshold there once it
+# reproduces the labels, and reports whether they match data/. data/ is never modified.
 verify_vol_threshold:
 	uv run python scripts/verify_vol_threshold.py
+
+verify_data:
+	uv run python scripts/verify_data_manifest.py
 
 check:
 	scripts/check.sh
@@ -56,6 +61,7 @@ check:
 test:
 	uv run pytest
 
+# The saved model is tracked, so clean leaves it alone. `make model` regenerates it.
 clean:
 	rm -f reports/metrics/oof_predictions.csv
-	rm -f models/artifacts/final_model_*.joblib
+	rm -rf build/vol_threshold build/.vol_threshold.*

@@ -21,8 +21,8 @@ def _raw():
 def test_grid_anchor_reproduces_persisted_threshold_and_labels():
     """
     At quantile 0.80 and horizon 10 the recomputed grid threshold matches the shipped
-    vol_threshold and the grid regime matches the persisted FwdVolRegime exactly, so the grid
-    is anchored to the headline evaluation.
+    vol_threshold (np.allclose), and the grid regime equals FwdVolRegime from add_regime_columns
+    wherever both are defined, so the grid is anchored to the headline evaluation.
     """
     raw = _raw()
     grid = grid_regime_columns(raw, forward_window=10, quantile=0.8)

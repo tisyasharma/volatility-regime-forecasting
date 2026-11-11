@@ -56,9 +56,9 @@ evaluation:
   forward_window: 10
   # The saved artifact is the model named here. Leave null to let scripts/save_model.py
   # pick the best learned model by walk-forward PR-AUC on the config target. Logistic
-  # regression is pinned because it has the top PR-AUC and the only edge over the matched
-  # naive baseline that clears both dependence-aware significance tests. That edge also
-  # survives a Holm correction across the three learned models compared.
+  # regression is pinned because it has the top PR-AUC, and after a Holm correction across
+  # the three learned models its edge over the matched naive baseline is the only one that
+  # remains significant under both dependence-aware tests.
   final_model: LogisticRegression
   targets:
     - NextVolSpike

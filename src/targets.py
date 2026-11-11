@@ -19,10 +19,11 @@ def add_regime_columns(df, forward_window=10, quantile=0.8, min_periods=126):
     Add the forward-disjoint target and the matched naive baseline signal from the persisted
     expanding volatility threshold. Assumes the frame is date-ordered within each ticker.
 
-    The threshold that defines both labels is stored in the vol_threshold column (built and
-    verified by scripts/verify_vol_threshold.py). Recomputing it from a warm-up-trimmed frame
-    would start every expanding window late and drift from the stored labels, so the persisted
-    column is authoritative and recomputation is only a fallback for frames that lack it.
+    The threshold that defines both labels is stored in the vol_threshold column, built by
+    notebook 00 and verified by scripts/verify_vol_threshold.py. Recomputing it from a
+    warm-up-trimmed frame would start every expanding window late and drift from the stored
+    labels, so the persisted column is authoritative and recomputation is only a fallback for
+    frames that lack it.
     """
     df = df.copy()
     ret = df.groupby("Ticker")["Return"]
@@ -86,7 +87,10 @@ def grid_regime_columns(df, forward_window, quantile, min_periods=126):
     The threshold is the expanding quantile of the trailing forward_window-day realized
     volatility, so the regime is defined on the same horizon it forecasts and the base rate is
     governed by the quantile rather than a fixed 10-day calibration. At forward_window=10 and
-    quantile=0.8 this reproduces the persisted vol_threshold and FwdVolRegime.
+    quantile=0.8 the threshold matches the persisted vol_threshold to floating-point rounding, and
+    the label matches FwdVolRegime wherever both are defined. On the raw file, which ends one
+    trading day after the clean file, it also labels 2026-01-07, the earliest of the trailing
+    clean dates that FwdVolRegime leaves blank.
     """
     df = df.copy()
     ret = df.groupby("Ticker")["Return"]

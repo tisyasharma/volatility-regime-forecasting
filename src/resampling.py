@@ -1,10 +1,10 @@
 """
 Dependence-aware resampling for the model comparison.
 
-Fold-block resampling captures serial correlation across the time-ordered folds. Date-block
-resampling additionally captures cross-sectional co-movement by resampling whole trading dates,
-each carrying its full cross-section of tickers, so the 14 co-moving names are not counted as
-independent draws.
+Fold-block resampling draws moving blocks of the time-ordered per-fold differences, so serial
+correlation between folds is kept, and the co-movement of tickers within a fold is part of each
+fold's value. Date-block resampling draws moving blocks of trading dates, each carrying its full
+cross-section of tickers, and recomputes each fold's statistic on the dates drawn for it.
 """
 
 import warnings
@@ -75,7 +75,10 @@ def moving_block_bootstrap_mean(diff, rng, n_boot=DEFAULT_N_BOOT, block=DEFAULT_
 
 
 def _two_tailed_p(samples):
-    """Two-tailed bootstrap p-value for a null of zero, floored at 1/B and capped at 1."""
+    """Twice the smaller share of draws at or below and at or above zero, in [1/B, 1].
+
+    This inverts the percentile interval. Nothing is resampled under the null.
+    """
     tail = min((samples <= 0).mean(), (samples >= 0).mean())
     return min(1.0, max(2 * tail, 1 / len(samples)))
 
@@ -116,19 +119,23 @@ def paired_edge_stats(diff, fold_ids, rng, n_boot=DEFAULT_N_BOOT, block=DEFAULT_
 
 def _average_precision(y, score):
     """
-    Average precision from a labels and scores pair, matching sklearn on tie-free scores.
+    Average precision from a labels and scores pair, matching sklearn's average_precision_score.
 
-    Recomputed here rather than through sklearn so the date-block bootstrap can call it tens of
-    thousands of times without the validation overhead. The model probabilities and the naive
-    volatility-to-threshold ratios are continuous, so ties do not arise in this pipeline.
+    Recomputed here rather than through sklearn so the date-block bootstrap can call it hundreds
+    of thousands of times without the validation overhead. Equal scores share a single threshold,
+    as in sklearn. This matters in the bootstrap, where a date drawn twice repeats its rows and
+    their scores.
     """
     order = np.argsort(-score, kind="mergesort")
-    y = y[order].astype(float)
-    tp = np.cumsum(y)
+    score = score[order]
+    tp = np.cumsum(y[order].astype(float))
     total_pos = tp[-1]
     if total_pos == 0:
         return 0.0
-    precision = tp / np.arange(1, len(y) + 1)
+    # The last row of each run of equal scores, where that run's threshold is evaluated.
+    threshold_end = np.r_[np.flatnonzero(np.diff(score)), len(score) - 1]
+    tp = tp[threshold_end]
+    precision = tp / (threshold_end + 1)
     recall = tp / total_pos
     rec_prev = np.concatenate([[0.0], recall[:-1]])
     return float(np.sum((recall - rec_prev) * precision))
@@ -137,7 +144,7 @@ def _average_precision(y, score):
 def date_block_bootstrap_edge(dates, folds, y_true, score_model, score_naive, rng,
                               n_boot=3000, block=21):
     """
-    Cross-sectional-aware bootstrap of the fold-mean PR-AUC edge, model minus matched naive.
+    Date-block bootstrap of the fold-mean PR-AUC edge, model minus matched naive.
 
     The statistic is the mean over folds of the per-fold PR-AUC difference, the same quantity
     the model comparison reports, so only the interval changes rather than the point estimate.

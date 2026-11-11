@@ -2,11 +2,12 @@
 Dependence-aware significance for the model comparison.
 
 Two resamplings test each model against the matched naive baseline on the forward-disjoint
-target. The fold-block bootstrap over the time-ordered folds corrects for serial correlation
-only. The date-block bootstrap resamples whole trading dates, each carrying its cross-section
-of tickers, so it also corrects for the co-movement of the 14 names. The date-block result is
-the primary one, the fold-block result is kept so the inflation from ignoring the cross-section
-is visible.
+target. The fold-block bootstrap resamples moving blocks of the time-ordered per-fold PR-AUC
+differences, so serial correlation between folds is kept. Each fold's PR-AUC is computed on all
+14 tickers at once, so their co-movement within a fold is part of each difference. The
+date-block bootstrap resamples moving blocks of trading dates, each carrying its cross-section
+of tickers and keeping its fold, and recomputes each fold's PR-AUC on the dates drawn for it.
+Both results are reported, and neither is designated primary.
 """
 
 import sys
@@ -37,7 +38,7 @@ def _round(value, digits):
 
 
 def fold_block_table(target):
-    """Fold-block bootstrap of the per-fold PR-AUC edge, the serial-only comparison."""
+    """Fold-block bootstrap of the mean per-fold PR-AUC edge."""
     per_fold = pd.read_csv(METRICS / "walkforward_per_fold.csv")
     sub = per_fold[per_fold["target"] == target]
     wide = sub.pivot_table(index="fold", columns="model", values=METRIC).sort_index()
@@ -68,7 +69,7 @@ def fold_block_table(target):
 
 
 def date_block_table(target):
-    """Date-block bootstrap of the pooled PR-AUC edge, the cross-sectional comparison."""
+    """Date-block bootstrap of the fold-mean PR-AUC edge."""
     oof = pd.read_csv(METRICS / "oof_predictions.csv", parse_dates=["Date"])
     if not {"Date", "Ticker"}.issubset(oof.columns):
         raise SystemExit(
@@ -116,14 +117,11 @@ def main():
 
     pd.set_option("display.width", 160)
     print(f"Model minus {BASELINE} on {target} {METRIC} (positive = model wins).\n")
-    print("Fold-block bootstrap (serial correlation across folds only):")
+    print("Fold-block bootstrap (moving blocks of per-fold differences):")
     print(fold.to_string(index=False))
-    print(f"\nDate-block bootstrap (date clusters, block {DATE_BLOCK} trading days, "
-          f"{N_BOOT_XS} resamples), the cross-sectional-aware primary:")
+    print(f"\nDate-block bootstrap (moving blocks of {DATE_BLOCK} trading dates, "
+          f"{N_BOOT_XS} resamples):")
     print(date.to_string(index=False))
-    print("\nRead: the date-block bootstrap resamples whole trading dates, so the 14 co-moving")
-    print("tickers count as one cross-section rather than 14 independent draws. It is the primary")
-    print("reading, and its larger p-value than the fold-block test is the honest cost of that.")
     return fold, date
 
 

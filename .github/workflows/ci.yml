@@ -4,10 +4,16 @@ on: push
 
 jobs:
   check:
-    runs-on: ubuntu-latest
+    # The committed metrics were produced on Apple silicon and reproduce byte for byte where that
+    # was verified, macOS arm64. LightGBM and XGBoost results differ on x86 even for identical
+    # inputs.
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v10.3.0
+      # The LightGBM and XGBoost macOS wheels link libomp but do not bundle it.
+      - name: Install OpenMP runtime
+        run: brew install libomp && brew list --versions libomp
       - name: Install dependencies
         run: uv sync --locked
       - name: Run checks

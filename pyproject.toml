@@ -16,7 +16,10 @@ dependencies = [
     "seaborn>=0.12",
     "statsmodels>=0.14",
     "ta>=0.11",
-    "xgboost>=2.0",
+    # The version that produced reports/metrics/. 3.3.0 moved to a local RNG and refactored the
+    # quantile sketch, and both 3.3.0 and 3.4.1 change every XGBoost row there. Upgrade only by
+    # regenerating and reviewing those files.
+    "xgboost==3.2.0",
     "yfinance>=0.2",
 ]
 
@@ -25,6 +28,7 @@ dev = [
     "defusedxml>=0.7",
     "hypothesis>=6.112",
     "mypy>=1.13",
+    "pandas-stubs>=3.0",
     "pytest>=8.3",
     "pytest-timeout>=2.3",
     "ruff>=0.7",
@@ -48,18 +52,30 @@ testpaths = ["tests"]
 pythonpath = ["."]
 addopts = ["--strict-markers", "-ra", "-m", "not network"]
 timeout = 300
+# The threshold tests copy the 23 MB datasets, so only failing tests keep their temp dirs.
+tmp_path_retention_policy = "failed"
 markers = [
     "oracle: cross-checks against QuantLib",
     "network: downloads live data, deselected by default (run with -m network)",
+    "golden: regenerates the committed metrics, skip while iterating with -m 'not golden and not network'",
 ]
 
-# Lint, format and type checks cover the test-gate tooling. The research code in src/,
-# scripts/ and its tests is added to these lists when it is refactored into a package, so
-# those files stay untouched until then.
+# Lint, format and type checks cover the gate tooling and the reproducibility checks. The
+# research code in src/, the pipeline scripts and their tests are added to these lists when
+# they are refactored into a package, and are not linted, formatted or type-checked until then.
 [tool.ruff]
 line-length = 100
 target-version = "py312"
-include = ["scripts/verify_required_tests.py", "tests/tooling/**/*.py"]
+include = [
+    "scripts/verify_data_manifest.py",
+    "scripts/verify_required_tests.py",
+    "scripts/verify_vol_threshold.py",
+    "tests/golden/**/*.py",
+    "tests/test_data_manifest.py",
+    "tests/test_model_artifact.py",
+    "tests/test_verify_vol_threshold.py",
+    "tests/tooling/**/*.py",
+]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "UP", "SIM", "NPY", "PT", "RUF"]
@@ -68,4 +84,24 @@ select = ["E", "F", "W", "I", "B", "UP", "SIM", "NPY", "PT", "RUF"]
 python_version = "3.12"
 strict = true
 explicit_package_bases = true
-files = ["scripts/verify_required_tests.py", "tests/tooling"]
+files = [
+    "scripts/verify_data_manifest.py",
+    "scripts/verify_required_tests.py",
+    "scripts/verify_vol_threshold.py",
+    "tests/golden",
+    "tests/test_data_manifest.py",
+    "tests/test_model_artifact.py",
+    "tests/test_verify_vol_threshold.py",
+    "tests/tooling",
+]
+
+# The research modules under src/ are not typed yet, so imports of them are treated as Any.
+# Remove this override once they are.
+[[tool.mypy.overrides]]
+module = ["src", "src.*"]
+follow_imports = "skip"
+
+# scikit-learn and joblib ship no type information.
+[[tool.mypy.overrides]]
+module = ["sklearn", "sklearn.*", "joblib", "joblib.*"]
+ignore_missing_imports = true
